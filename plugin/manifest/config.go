@@ -1,7 +1,6 @@
 package manifest
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -100,52 +99,9 @@ func (c Config) Lookup(name string) (ConfigField, bool) {
 func ParseConfig(data []byte) (Config, error) {
 	root, err := decodeSingleYAMLDocument(data)
 	if err != nil {
-		return Config{}, err
+		return Config{}, invalidConfig("%v", err)
 	}
 	return parseConfigNode(root)
-}
-
-func decodeSingleYAMLDocument(data []byte) (*yaml.Node, error) {
-	if len(data) == 0 {
-		return nil, invalidConfig("document is empty")
-	}
-	if len(data) > MaximumDeclarationSize {
-		return nil, invalidConfig("document exceeds %d bytes", MaximumDeclarationSize)
-	}
-	decoder := yaml.NewDecoder(bytes.NewReader(data))
-	var document yaml.Node
-	if err := decoder.Decode(&document); err != nil {
-		return nil, invalidConfig("decode YAML: %v", err)
-	}
-	var trailing yaml.Node
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return nil, invalidConfig("multiple YAML documents are not allowed")
-		}
-		return nil, invalidConfig("decode trailing YAML: %v", err)
-	}
-	if document.Kind != yaml.DocumentNode || len(document.Content) != 1 {
-		return nil, invalidConfig("expected one YAML document")
-	}
-	if err := rejectYAMLReferences(&document); err != nil {
-		return nil, err
-	}
-	return document.Content[0], nil
-}
-
-func rejectYAMLReferences(node *yaml.Node) error {
-	if node == nil {
-		return nil
-	}
-	if node.Kind == yaml.AliasNode || node.Alias != nil || node.Anchor != "" {
-		return invalidConfig("YAML anchors and aliases are not allowed")
-	}
-	for _, child := range node.Content {
-		if err := rejectYAMLReferences(child); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func parseConfigNode(root *yaml.Node) (Config, error) {
