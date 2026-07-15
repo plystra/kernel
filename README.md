@@ -16,6 +16,8 @@ Capability contracts use the strict `plugin/manifest.ParseCapability` parser. A 
 
 `Capability.CanonicalSchemaJSON` removes source-only differences and `Capability.SchemaDigest` derives its stable SHA-256 fingerprint. Field, enum, and error order, YAML formatting, descriptions, and explicit false values do not change the wire schema; identities, types, required fields, and semantic errors do.
 
+The immutable `capability/catalog` package distributes official definitions with the Kernel. `catalog.Lookup` and `catalog.Definitions` expose validated contracts, semantic schema digests, and defensive copies of canonical LF-only source suitable for CLI materialization; the initial catalog includes the documented `email.send/v1` contract.
+
 ## Assembly compatibility
 
 Generated assembly source declares the assembly API version it targets. The Kernel validates that version through `assembly.RequireVersion` before accepting generated assembly metadata. The current contract is `assembly.V1`; incompatible versions fail explicitly instead of being interpreted by a different runtime contract.

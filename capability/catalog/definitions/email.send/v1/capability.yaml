@@ -1,0 +1,34 @@
+id: email.send/v1
+
+description: Sends an email message.
+
+request:
+  to:
+    type: array
+    items: string
+    required: true
+
+  subject:
+    type: string
+    required: true
+
+  text:
+    type: string
+
+  html:
+    type: string
+
+response:
+  message_id:
+    type: string
+    required: true
+
+  status:
+    type: string
+    enum: [queued, sent]
+    required: true
+
+errors:
+  - invalid_recipient
+  - authentication_failed
+  - temporarily_unavailable
