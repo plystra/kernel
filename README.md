@@ -28,6 +28,8 @@ Runtime audit uses distinct `audit.RequestID`, `audit.TraceID`, and `audit.Invoc
 
 `Scope.NewRootContext` lets only an explicit Kernel caller mint a root runtime frame with cryptographic request and trace IDs plus validated subject context. Existing or malformed frames, plugin callers, and missing inputs fail closed. The frame retains the original trusted deadline and cancellation authority even if ordinary Go cancellation is later detached.
 
+Each governed provider entry derives an immutable child frame with a unique invocation ID and immediate parent ancestry. The effective deadline is the earliest configured, caller, or trusted-frame deadline, and trusted cancellation remains linked through detached Go contexts. Providers can inspect only the safe request, trace, ancestry, subject, tenant, and deadline snapshot through `invocation.Current`; root frames, cancellation authority, and mutable runtime state are not exposed.
+
 Concrete implementation identities are parsed separately by `plugin.ParseID`, for example `acme.email.smtp`. A Plugin ID is never a capability identity and carries no independent version; the containing Go Module supplies distribution versioning.
 
 Plugin configuration declarations use the strict DSL parsed by `plugin/manifest.ParseConfig`. Supported types are `string`, `integer`, `number`, `boolean`, `duration`, `url`, `secret`, `object`, and `array`; secret fields cannot contain defaults, and all generated defaults and enums have deterministic JSON forms.
