@@ -94,12 +94,12 @@ func TestNewHandleRejectsInvalidInputs(t *testing.T) {
 	}
 }
 
-func TestHandleExposesNoInvocationOrMutableState(t *testing.T) {
+func TestHandleExposesGovernedInvocationWithoutMutableState(t *testing.T) {
 	t.Parallel()
 
 	handleType := reflect.TypeFor[Handle[handleRequest, handleResponse]]()
-	if _, exists := handleType.MethodByName("Invoke"); exists {
-		t.Fatal("Handle exposed invocation before governance was bound")
+	if _, exists := handleType.MethodByName("Invoke"); !exists {
+		t.Fatal("Handle omitted governed invocation")
 	}
 	for index := range handleType.NumField() {
 		if field := handleType.Field(index); field.IsExported() {

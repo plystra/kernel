@@ -10,7 +10,8 @@ import (
 var ErrInvalidHandle = errors.New("invalid capability handle")
 
 // Handle is an opaque typed, caller-bound reference to one exact capability
-// contract. It is inert until the Kernel's governed invocation path is bound.
+// contract. It carries no provider function; Invoke always delegates through
+// its bound Dispatcher's governed runtime path.
 type Handle[Request, Response any] struct {
 	scope      Scope
 	definition capability.Definition

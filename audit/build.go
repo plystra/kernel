@@ -26,6 +26,7 @@ type ModuleBuild struct {
 	modulePath    string
 	moduleVersion string
 	buildIdentity string
+	initialized   bool
 }
 
 // NewModuleBuild validates a canonical Go module path and either its canonical
@@ -37,9 +38,10 @@ func NewModuleBuild(modulePath, moduleVersion, buildIdentity string) (ModuleBuil
 		moduleVersion: moduleVersion,
 		buildIdentity: buildIdentity,
 	}
-	if !build.Valid() {
+	if !validModuleBuild(build) {
 		return ModuleBuild{}, ErrInvalidModuleBuild
 	}
+	build.initialized = true
 	return build, nil
 }
 
@@ -67,8 +69,12 @@ func (b ModuleBuild) BuildIdentity() string {
 	return b.buildIdentity
 }
 
-// Valid reports whether the provenance has one canonical auditable shape.
+// Valid reports whether the immutable provenance passed constructor validation.
 func (b ModuleBuild) Valid() bool {
+	return b.initialized
+}
+
+func validModuleBuild(b ModuleBuild) bool {
 	if len(b.modulePath) == 0 || len(b.modulePath) > MaximumModulePathSize || module.CheckPath(b.modulePath) != nil {
 		return false
 	}
