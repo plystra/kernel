@@ -1,5 +1,5 @@
-// Package audit defines immutable identities and records owned by the Kernel's
-// runtime audit boundary.
+// Package audit defines immutable identities, records, and delivery boundaries
+// owned by the Kernel's runtime audit boundary.
 package audit
 
 import (

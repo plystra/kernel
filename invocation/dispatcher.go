@@ -5,6 +5,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/plystra/kernel/audit"
 	"github.com/plystra/kernel/capability"
 )
 
@@ -22,6 +23,7 @@ var (
 type DispatcherOptions struct {
 	DefaultTimeout time.Duration
 	Authorizer     Authorizer
+	AuditRecorder  *audit.InvocationRecorder
 }
 
 // Dispatcher owns one atomically published immutable executable catalog. A
@@ -29,16 +31,21 @@ type DispatcherOptions struct {
 type Dispatcher struct {
 	defaultTimeout time.Duration
 	authorizer     Authorizer
+	auditRecorder  *audit.InvocationRecorder
 	catalog        atomic.Pointer[catalogState]
 }
 
-// NewDispatcher creates an unpublished Dispatcher with mandatory authorization
-// and a positive default execution timeout.
+// NewDispatcher creates an unpublished Dispatcher with mandatory authorization,
+// audit recording, and a positive default execution timeout.
 func NewDispatcher(options DispatcherOptions) (*Dispatcher, error) {
-	if options.DefaultTimeout <= 0 || options.Authorizer == nil {
+	if options.DefaultTimeout <= 0 || options.Authorizer == nil || !options.AuditRecorder.Valid() {
 		return nil, ErrInvalidDispatcher
 	}
-	return &Dispatcher{defaultTimeout: options.DefaultTimeout, authorizer: options.Authorizer}, nil
+	return &Dispatcher{
+		defaultTimeout: options.DefaultTimeout,
+		authorizer:     options.Authorizer,
+		auditRecorder:  options.AuditRecorder,
+	}, nil
 }
 
 // Publish atomically installs one complete catalog exactly once. The catalog
@@ -64,7 +71,7 @@ func (d *Dispatcher) Published() bool {
 }
 
 func (d *Dispatcher) valid() bool {
-	return d != nil && d.defaultTimeout > 0 && d.authorizer != nil
+	return d != nil && d.defaultTimeout > 0 && d.authorizer != nil && d.auditRecorder.Valid()
 }
 
 func (d *Dispatcher) snapshot() (*catalogState, error) {
