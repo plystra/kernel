@@ -14,6 +14,8 @@ Typed capability declarations use `capability.Contract[Request, Response]`. Each
 
 An `invocation.Dispatcher` requires a positive default execution timeout and atomically publishes one complete copied catalog exactly once. Before publication it is explicitly not ready; failed validation leaves it unpublished, concurrent publishers have one winner, and readers observe either no catalog or one complete immutable snapshot.
 
+Runtime caller provenance uses immutable `audit.CallerIdentity` values. Kernel-owned callers have no fabricated Plugin ID, while plugin callers carry one exact canonical Plugin ID. Module build data, authenticated service identity, user or tenant identity, and transport metadata remain separate governed invocation facts.
+
 Concrete implementation identities are parsed separately by `plugin.ParseID`, for example `acme.email.smtp`. A Plugin ID is never a capability identity and carries no independent version; the containing Go Module supplies distribution versioning.
 
 Plugin configuration declarations use the strict DSL parsed by `plugin/manifest.ParseConfig`. Supported types are `string`, `integer`, `number`, `boolean`, `duration`, `url`, `secret`, `object`, and `array`; secret fields cannot contain defaults, and all generated defaults and enums have deterministic JSON forms.
