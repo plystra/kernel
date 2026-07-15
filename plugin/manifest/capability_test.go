@@ -1,6 +1,8 @@
 package manifest_test
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -230,6 +232,14 @@ func FuzzParseCapability(f *testing.F) {
 		}
 		if contract.ID().String() == "" {
 			t.Fatal("ParseCapability returned a capability without an ID")
+		}
+		first, err := contract.CanonicalSchemaJSON()
+		if err != nil || !json.Valid(first) {
+			t.Fatalf("CanonicalSchemaJSON = %q, %v", first, err)
+		}
+		second, err := contract.CanonicalSchemaJSON()
+		if err != nil || !bytes.Equal(first, second) {
+			t.Fatalf("canonical schema is not deterministic: %q then %q, %v", first, second, err)
 		}
 		assertSortedSchema(t, contract.Request())
 		assertSortedSchema(t, contract.Response())

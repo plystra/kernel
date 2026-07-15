@@ -14,6 +14,8 @@ The current `plugin.yaml` envelope is parsed by `plugin/manifest.ParsePlugin`. I
 
 Capability contracts use the strict `plugin/manifest.ParseCapability` parser. A `capability.yaml` contains an exact `id`, optional description, request and response field mappings, and semantic error codes. Contract fields support the JSON-oriented `string`, `integer`, `number`, `boolean`, `object`, and typed `array` forms used by Go and JavaScript generation.
 
+`Capability.CanonicalSchemaJSON` removes source-only differences and `Capability.SchemaDigest` derives its stable SHA-256 fingerprint. Field, enum, and error order, YAML formatting, descriptions, and explicit false values do not change the wire schema; identities, types, required fields, and semantic errors do.
+
 ## Assembly compatibility
 
 Generated assembly source declares the assembly API version it targets. The Kernel validates that version through `assembly.RequireVersion` before accepting generated assembly metadata. The current contract is `assembly.V1`; incompatible versions fail explicitly instead of being interpreted by a different runtime contract.
