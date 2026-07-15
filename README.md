@@ -18,6 +18,8 @@ Runtime caller provenance uses immutable `audit.CallerIdentity` values. Kernel-o
 
 `Dispatcher.Scope` binds one validated caller identity to exactly one Dispatcher without exposing an invocation surface. Scopes can be staged before catalog publication and remain opaque to plugin code, allowing generated assembly to create caller-bound typed handles only after their contracts and dependency resolutions are known.
 
+`invocation.NewHandle` turns a scope, exact typed contract, and generated provider-availability result into an inert typed reference. A handle currently exposes only its capability identifier and availability; both generic type arguments are part of its representation, and no invocation method is exposed before context, authorization, audit, deadline, and safe-error governance are bound.
+
 Concrete implementation identities are parsed separately by `plugin.ParseID`, for example `acme.email.smtp`. A Plugin ID is never a capability identity and carries no independent version; the containing Go Module supplies distribution versioning.
 
 Plugin configuration declarations use the strict DSL parsed by `plugin/manifest.ParseConfig`. Supported types are `string`, `integer`, `number`, `boolean`, `duration`, `url`, `secret`, `object`, and `array`; secret fields cannot contain defaults, and all generated defaults and enums have deterministic JSON forms.
