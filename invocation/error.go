@@ -3,12 +3,9 @@ package invocation
 import (
 	"context"
 	"errors"
-	"strings"
 
 	"github.com/plystra/kernel/audit"
 )
-
-const maximumDetailCodeSize = 128
 
 // ErrInvalidError reports an invalid failure class or detail code.
 var ErrInvalidError = errors.New("invalid capability invocation error")
@@ -70,7 +67,7 @@ func (e *Error) Is(target error) bool {
 }
 
 func (e *Error) valid() bool {
-	if e == nil || !e.code.Valid() || !validDetailCode(e.detailCode) {
+	if e == nil || !e.code.Valid() || !audit.ValidDetailCode(e.detailCode) {
 		return false
 	}
 	if e.code == audit.ErrorDenied && e.detailCode == "" {
@@ -88,34 +85,4 @@ func contextCause(code audit.ErrorCode) error {
 	default:
 		return nil
 	}
-}
-
-func validDetailCode(code string) bool {
-	if code == "" {
-		return true
-	}
-	if len(code) > maximumDetailCodeSize {
-		return false
-	}
-	for _, segment := range strings.Split(code, ".") {
-		if segment == "" || segment[0] < 'a' || segment[0] > 'z' {
-			return false
-		}
-		previousUnderscore := false
-		for index := 1; index < len(segment); index++ {
-			character := segment[index]
-			switch {
-			case character >= 'a' && character <= 'z', character >= '0' && character <= '9':
-				previousUnderscore = false
-			case character == '_' && !previousUnderscore:
-				previousUnderscore = true
-			default:
-				return false
-			}
-		}
-		if previousUnderscore {
-			return false
-		}
-	}
-	return true
 }

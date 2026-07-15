@@ -20,7 +20,7 @@ Runtime caller provenance uses immutable `audit.CallerIdentity` values. Kernel-o
 
 `invocation.NewHandle` turns a scope, exact typed contract, and generated provider-availability result into an inert typed reference. A handle currently exposes only its capability identifier and availability; both generic type arguments are part of its representation, and no invocation method is exposed before context, authorization, audit, deadline, and safe-error governance are bound.
 
-Capability failures use the closed `audit.ErrorCode` taxonomy and immutable `invocation.Error` boundary values. Only validated machine-readable classes and detail codes can cross the boundary; denials require an auditable reason, cancellation and timeout preserve their standard Go identities, and no provider cause or free-form message is stored.
+Capability failures use the closed `audit.ErrorCode` taxonomy, immutable `invocation.Error` boundary values, and matching terminal `audit.Outcome` states. Only validated machine-readable classes and detail codes can cross the boundary; denials require an auditable reason, cancellation and timeout preserve their standard Go identities, and no provider cause or free-form message is stored.
 
 Runtime audit uses distinct `audit.RequestID`, `audit.TraceID`, and `audit.InvocationID` types backed by canonical non-zero 128-bit lower-case hexadecimal values. Root IDs are generated with cryptographic randomness, while external representations must pass the same strict parsers before entering runtime context.
 

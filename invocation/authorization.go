@@ -81,7 +81,7 @@ func (d AuthorizationDecision) Valid() bool {
 	case authorizationAllowed:
 		return d.denialCode == ""
 	case authorizationDenied:
-		return d.denialCode != "" && validDetailCode(d.denialCode)
+		return d.denialCode != "" && audit.ValidDetailCode(d.denialCode)
 	default:
 		return false
 	}

@@ -70,7 +70,7 @@ func TestNewErrorAcceptsCanonicalDetailCodes(t *testing.T) {
 		"invalid_recipient",
 		"authorization.policy_denied",
 		"contract.v2_error",
-		strings.Repeat("a", maximumDetailCodeSize),
+		strings.Repeat("a", audit.MaximumDetailCodeSize),
 	} {
 		boundary, err := NewError(audit.ErrorInternal, detail)
 		if err != nil || !boundary.valid() || boundary.DetailCode() != detail {
@@ -96,8 +96,8 @@ func TestNewErrorRejectsInvalidCodesAndDetails(t *testing.T) {
 		{code: audit.ErrorInternal, detail: "bad."},
 		{code: audit.ErrorInternal, detail: "bad..code"},
 		{code: audit.ErrorInternal, detail: "bad code"},
-		{code: audit.ErrorInternal, detail: "秘密"},
-		{code: audit.ErrorInternal, detail: strings.Repeat("a", maximumDetailCodeSize+1)},
+		{code: audit.ErrorInternal, detail: "\u79d8\u5bc6"},
+		{code: audit.ErrorInternal, detail: strings.Repeat("a", audit.MaximumDetailCodeSize+1)},
 	} {
 		boundary, err := NewError(test.code, test.detail)
 		if !errors.Is(err, ErrInvalidError) || boundary != nil {
