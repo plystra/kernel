@@ -26,6 +26,8 @@ Runtime audit uses distinct `audit.RequestID`, `audit.TraceID`, and `audit.Invoc
 
 `audit.SubjectContext` carries bounded opaque subject and tenant or authorization-space references without making authentication or authorization a Kernel business domain. Anonymous access is represented by an explicitly constructed empty context; the zero value remains invalid so a missing ingress decision cannot silently become anonymous.
 
+`Scope.NewRootContext` lets only an explicit Kernel caller mint a root runtime frame with cryptographic request and trace IDs plus validated subject context. Existing or malformed frames, plugin callers, and missing inputs fail closed. The frame retains the original trusted deadline and cancellation authority even if ordinary Go cancellation is later detached.
+
 Concrete implementation identities are parsed separately by `plugin.ParseID`, for example `acme.email.smtp`. A Plugin ID is never a capability identity and carries no independent version; the containing Go Module supplies distribution versioning.
 
 Plugin configuration declarations use the strict DSL parsed by `plugin/manifest.ParseConfig`. Supported types are `string`, `integer`, `number`, `boolean`, `duration`, `url`, `secret`, `object`, and `array`; secret fields cannot contain defaults, and all generated defaults and enums have deterministic JSON forms.
