@@ -24,11 +24,11 @@ var (
 
 // ProviderKind distinguishes Kernel-owned endpoints from already-selected
 // plugin endpoints. It does not perform or influence provider selection.
-type ProviderKind string
+type ProviderKind = audit.ProviderKind
 
 const (
-	ProviderKindKernel ProviderKind = "kernel"
-	ProviderKindPlugin ProviderKind = "plugin"
+	ProviderKindKernel = audit.ProviderKindKernel
+	ProviderKindPlugin = audit.ProviderKindPlugin
 )
 
 // BindingOptions is the generated, already-resolved metadata for one endpoint.

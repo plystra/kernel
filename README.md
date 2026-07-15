@@ -22,6 +22,8 @@ Runtime caller provenance uses immutable `audit.CallerIdentity` values. Kernel-o
 
 Capability failures use the closed `audit.ErrorCode` taxonomy, immutable `invocation.Error` boundary values, and matching terminal `audit.Outcome` states. Only validated machine-readable classes and detail codes can cross the boundary; denials require an auditable reason, cancellation and timeout preserve their standard Go identities, and no provider cause or free-form message is stored.
 
+`audit.InvocationRecord` is the immutable terminal envelope for one governed capability call. It binds the exact capability and canonical schema digest to runtime caller provenance, the selected Kernel or Plugin provider and its module build, the provider-neutral security context, request and invocation ancestry, local or remote execution, canonical UTC timing, monotonic duration, and a closed outcome. It deliberately stores no request or response payload, credential, provider error, panic value, stack trace, or User record.
+
 Runtime audit uses distinct `audit.RequestID`, `audit.TraceID`, and `audit.InvocationID` types backed by canonical non-zero 128-bit lower-case hexadecimal values. Root IDs are generated with cryptographic randomness, while external representations must pass the same strict parsers before entering runtime context.
 
 `audit.ModuleBuild` carries bounded immutable provider provenance using a canonical Go module path plus a canonical matching module version, a safe generated or VCS build identity, or both. Development modules without a version must still provide a build identity. This embedded observability fact never replaces `go.mod`, `go.sum`, or Go's dependency resolution.
