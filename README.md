@@ -10,7 +10,7 @@ Typed capability declarations use `capability.Contract[Request, Response]`. Each
 
 `invocation.NewEndpoint` binds one typed contract to its handler while keeping type erasure inside the Kernel. Endpoints reject independently declared contract definitions, preserve typed nil values and provider errors, and recover panics as `invocation.ErrProviderPanic` without exposing panic payloads.
 
-`invocation.NewCatalog` accepts only validated, already-resolved endpoint bindings carrying their canonical schema digest and selected Kernel or Plugin provider identity. It performs no runtime provider selection, distinguishes exact capability versions, copies source state, and serves immutable lock-free lookups, including a valid empty catalog for zero-plugin applications.
+`invocation.NewCatalog` accepts only validated, already-resolved endpoint bindings carrying their canonical schema digest, selected Kernel or Plugin provider identity, and immutable Go module build provenance. Missing provider-build metadata fails closed before publication. The catalog performs no runtime provider selection, distinguishes exact capability versions, copies source state, and serves immutable lock-free lookups, including a valid empty catalog for zero-plugin applications.
 
 An `invocation.Dispatcher` requires a positive default execution timeout and an explicit capability authorizer, then atomically publishes one complete copied catalog exactly once. Missing authorization policy fails construction rather than defaulting to allow. Before publication the Dispatcher is explicitly not ready; failed validation leaves it unpublished, concurrent publishers have one winner, and readers observe either no catalog or one complete immutable snapshot.
 

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/plystra/kernel/audit"
 	"github.com/plystra/kernel/capability"
 	"github.com/plystra/kernel/plugin"
 )
@@ -21,16 +22,18 @@ func TestCatalogCopiesResolvedPluginBindings(t *testing.T) {
 		t.Fatalf("NewEndpoint: %v", err)
 	}
 	providerID := mustPluginID(t, "acme.email.smtp")
+	providerBuild := mustModuleBuild(t, "github.com/acme/email", "v1.4.2", "git:0123456789abcdef")
 	digest := sha256.Sum256([]byte("email.send/v1 schema"))
 	binding, err := NewBinding(BindingOptions{
-		ProviderKind: ProviderKindPlugin,
-		ProviderID:   providerID,
-		SchemaDigest: digest,
+		ProviderKind:  ProviderKindPlugin,
+		ProviderID:    providerID,
+		ProviderBuild: providerBuild,
+		SchemaDigest:  digest,
 	}, endpoint)
 	if err != nil {
 		t.Fatalf("NewBinding: %v", err)
 	}
-	if binding.Capability() != contract.Identifier() || binding.Definition() != contract.Definition() || binding.ProviderKind() != ProviderKindPlugin || binding.ProviderID() != providerID || binding.SchemaDigest() != digest {
+	if binding.Capability() != contract.Identifier() || binding.Definition() != contract.Definition() || binding.ProviderKind() != ProviderKindPlugin || binding.ProviderID() != providerID || binding.ProviderBuild() != providerBuild || binding.SchemaDigest() != digest {
 		t.Fatalf("binding accessors = %#v", binding)
 	}
 
@@ -41,7 +44,7 @@ func TestCatalogCopiesResolvedPluginBindings(t *testing.T) {
 	}
 	source[0] = Binding{}
 	got, exists := catalog.Lookup(contract.Identifier())
-	if !exists || got.ProviderID() != providerID || got.SchemaDigest() != digest {
+	if !exists || got.ProviderID() != providerID || got.ProviderBuild() != providerBuild || got.SchemaDigest() != digest {
 		t.Fatalf("Lookup = %#v, %t", got, exists)
 	}
 	bindings := catalog.Bindings()
@@ -59,14 +62,16 @@ func TestCatalogSupportsKernelBindingWithoutPluginID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEndpoint: %v", err)
 	}
+	providerBuild := mustModuleBuild(t, "github.com/plystra/kernel", "v0.1.0", "")
 	binding, err := NewBinding(BindingOptions{
-		ProviderKind: ProviderKindKernel,
-		SchemaDigest: sha256.Sum256([]byte("kernel.health/v1 schema")),
+		ProviderKind:  ProviderKindKernel,
+		ProviderBuild: providerBuild,
+		SchemaDigest:  sha256.Sum256([]byte("kernel.health/v1 schema")),
 	}, endpoint)
 	if err != nil {
 		t.Fatalf("NewBinding: %v", err)
 	}
-	if binding.ProviderKind() != ProviderKindKernel || binding.ProviderID().String() != "" {
+	if binding.ProviderKind() != ProviderKindKernel || binding.ProviderID().String() != "" || binding.ProviderBuild() != providerBuild {
 		t.Fatalf("Kernel binding = %#v", binding)
 	}
 	catalog, err := NewCatalog([]Binding{binding})
@@ -74,7 +79,7 @@ func TestCatalogSupportsKernelBindingWithoutPluginID(t *testing.T) {
 		t.Fatalf("NewCatalog: %v", err)
 	}
 	got, exists := catalog.Lookup(contract.Identifier())
-	if !exists || got.ProviderKind() != ProviderKindKernel || got.ProviderID().String() != "" {
+	if !exists || got.ProviderKind() != ProviderKindKernel || got.ProviderID().String() != "" || got.ProviderBuild() != providerBuild {
 		t.Fatalf("Kernel Lookup = %#v, %t", got, exists)
 	}
 }
@@ -88,17 +93,19 @@ func TestNewBindingRejectsInvalidMetadata(t *testing.T) {
 		t.Fatalf("NewEndpoint: %v", err)
 	}
 	providerID := mustPluginID(t, "acme.example.provider")
+	providerBuild := mustModuleBuild(t, "github.com/acme/example", "v1.0.0", "")
 	digest := sha256.Sum256([]byte("example.operation/v1 schema"))
 	tests := []struct {
 		name     string
 		options  BindingOptions
 		endpoint Endpoint
 	}{
-		{name: "zero endpoint", options: BindingOptions{ProviderKind: ProviderKindPlugin, ProviderID: providerID, SchemaDigest: digest}},
-		{name: "zero digest", options: BindingOptions{ProviderKind: ProviderKindPlugin, ProviderID: providerID}, endpoint: endpoint},
-		{name: "unknown provider kind", options: BindingOptions{ProviderID: providerID, SchemaDigest: digest}, endpoint: endpoint},
-		{name: "Kernel with plugin ID", options: BindingOptions{ProviderKind: ProviderKindKernel, ProviderID: providerID, SchemaDigest: digest}, endpoint: endpoint},
-		{name: "plugin without ID", options: BindingOptions{ProviderKind: ProviderKindPlugin, SchemaDigest: digest}, endpoint: endpoint},
+		{name: "zero endpoint", options: BindingOptions{ProviderKind: ProviderKindPlugin, ProviderID: providerID, ProviderBuild: providerBuild, SchemaDigest: digest}},
+		{name: "zero digest", options: BindingOptions{ProviderKind: ProviderKindPlugin, ProviderID: providerID, ProviderBuild: providerBuild}, endpoint: endpoint},
+		{name: "zero provider build", options: BindingOptions{ProviderKind: ProviderKindPlugin, ProviderID: providerID, SchemaDigest: digest}, endpoint: endpoint},
+		{name: "unknown provider kind", options: BindingOptions{ProviderID: providerID, ProviderBuild: providerBuild, SchemaDigest: digest}, endpoint: endpoint},
+		{name: "Kernel with plugin ID", options: BindingOptions{ProviderKind: ProviderKindKernel, ProviderID: providerID, ProviderBuild: providerBuild, SchemaDigest: digest}, endpoint: endpoint},
+		{name: "plugin without ID", options: BindingOptions{ProviderKind: ProviderKindPlugin, ProviderBuild: providerBuild, SchemaDigest: digest}, endpoint: endpoint},
 	}
 	for _, test := range tests {
 		test := test
@@ -108,7 +115,7 @@ func TestNewBindingRejectsInvalidMetadata(t *testing.T) {
 			if !errors.Is(err, ErrInvalidBinding) {
 				t.Fatalf("NewBinding error = %v, want ErrInvalidBinding", err)
 			}
-			if binding.valid() || binding.Capability().String() != "" || binding.Definition().Valid() || binding.ProviderKind() != "" || binding.ProviderID().String() != "" || binding.SchemaDigest() != [sha256.Size]byte{} {
+			if binding.valid() || binding.Capability().String() != "" || binding.Definition().Valid() || binding.ProviderKind() != "" || binding.ProviderID().String() != "" || binding.ProviderBuild().Valid() || binding.SchemaDigest() != [sha256.Size]byte{} {
 				t.Fatalf("invalid binding = %#v", binding)
 			}
 		})
@@ -121,6 +128,7 @@ func TestNewCatalogRejectsInvalidAndDuplicateBindings(t *testing.T) {
 	contract := capability.MustParseContract[endpointRequest, endpointResponse]("example.operation/v1")
 	independent := capability.MustParseContract[endpointRequest, endpointResponse]("example.operation/v1")
 	providerID := mustPluginID(t, "acme.example.provider")
+	providerBuild := mustModuleBuild(t, "github.com/acme/example", "v1.0.0", "")
 	digest := sha256.Sum256([]byte("example.operation/v1 schema"))
 	firstEndpoint, err := NewEndpoint(contract, successfulEndpointHandler)
 	if err != nil {
@@ -130,11 +138,11 @@ func TestNewCatalogRejectsInvalidAndDuplicateBindings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEndpoint second: %v", err)
 	}
-	first, err := NewBinding(BindingOptions{ProviderKind: ProviderKindPlugin, ProviderID: providerID, SchemaDigest: digest}, firstEndpoint)
+	first, err := NewBinding(BindingOptions{ProviderKind: ProviderKindPlugin, ProviderID: providerID, ProviderBuild: providerBuild, SchemaDigest: digest}, firstEndpoint)
 	if err != nil {
 		t.Fatalf("NewBinding first: %v", err)
 	}
-	second, err := NewBinding(BindingOptions{ProviderKind: ProviderKindPlugin, ProviderID: providerID, SchemaDigest: digest}, secondEndpoint)
+	second, err := NewBinding(BindingOptions{ProviderKind: ProviderKindPlugin, ProviderID: providerID, ProviderBuild: providerBuild, SchemaDigest: digest}, secondEndpoint)
 	if err != nil {
 		t.Fatalf("NewBinding second: %v", err)
 	}
@@ -295,9 +303,10 @@ func benchmarkCatalog(b *testing.B) (Catalog, capability.Identifier) {
 		b.Fatalf("ParseID: %v", err)
 	}
 	binding, err := NewBinding(BindingOptions{
-		ProviderKind: ProviderKindPlugin,
-		ProviderID:   providerID,
-		SchemaDigest: sha256.Sum256([]byte("example.benchmark/v1 schema")),
+		ProviderKind:  ProviderKindPlugin,
+		ProviderID:    providerID,
+		ProviderBuild: mustModuleBuildBenchmark(b, "github.com/acme/example", "v1.0.0", ""),
+		SchemaDigest:  sha256.Sum256([]byte("example.benchmark/v1 schema")),
 	}, endpoint)
 	if err != nil {
 		b.Fatalf("NewBinding: %v", err)
@@ -317,14 +326,33 @@ func testBinding(t *testing.T, identifier string, providerID plugin.ID) Binding 
 		t.Fatalf("NewEndpoint: %v", err)
 	}
 	binding, err := NewBinding(BindingOptions{
-		ProviderKind: ProviderKindPlugin,
-		ProviderID:   providerID,
-		SchemaDigest: sha256.Sum256([]byte(identifier + " schema")),
+		ProviderKind:  ProviderKindPlugin,
+		ProviderID:    providerID,
+		ProviderBuild: mustModuleBuild(t, "github.com/acme/example", "v1.0.0", ""),
+		SchemaDigest:  sha256.Sum256([]byte(identifier + " schema")),
 	}, endpoint)
 	if err != nil {
 		t.Fatalf("NewBinding: %v", err)
 	}
 	return binding
+}
+
+func mustModuleBuild(t *testing.T, modulePath, moduleVersion, buildIdentity string) audit.ModuleBuild {
+	t.Helper()
+	build, err := audit.NewModuleBuild(modulePath, moduleVersion, buildIdentity)
+	if err != nil {
+		t.Fatalf("NewModuleBuild: %v", err)
+	}
+	return build
+}
+
+func mustModuleBuildBenchmark(b *testing.B, modulePath, moduleVersion, buildIdentity string) audit.ModuleBuild {
+	b.Helper()
+	build, err := audit.NewModuleBuild(modulePath, moduleVersion, buildIdentity)
+	if err != nil {
+		b.Fatalf("NewModuleBuild: %v", err)
+	}
+	return build
 }
 
 func mustPluginID(t *testing.T, value string) plugin.ID {

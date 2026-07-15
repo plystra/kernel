@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/plystra/kernel/audit"
 	"github.com/plystra/kernel/capability"
 	"github.com/plystra/kernel/plugin"
 )
@@ -32,28 +33,32 @@ const (
 
 // BindingOptions is the generated, already-resolved metadata for one endpoint.
 type BindingOptions struct {
-	ProviderKind ProviderKind
-	ProviderID   plugin.ID
-	SchemaDigest [sha256.Size]byte
+	ProviderKind  ProviderKind
+	ProviderID    plugin.ID
+	ProviderBuild audit.ModuleBuild
+	SchemaDigest  [sha256.Size]byte
 }
 
-// Binding joins one selected provider and schema digest to its executable
-// endpoint.
+// Binding joins one selected provider, its auditable module provenance, and
+// schema digest to its executable endpoint.
 type Binding struct {
-	providerKind ProviderKind
-	providerID   plugin.ID
-	schemaDigest [sha256.Size]byte
-	endpoint     Endpoint
+	providerKind  ProviderKind
+	providerID    plugin.ID
+	providerBuild audit.ModuleBuild
+	schemaDigest  [sha256.Size]byte
+	endpoint      Endpoint
 }
 
 // NewBinding validates one already-resolved executable endpoint. A plugin
 // binding requires its concrete Plugin ID; a Kernel binding must not have one.
+// Every binding requires immutable module build provenance for runtime audit.
 func NewBinding(options BindingOptions, endpoint Endpoint) (Binding, error) {
 	binding := Binding{
-		providerKind: options.ProviderKind,
-		providerID:   options.ProviderID,
-		schemaDigest: options.SchemaDigest,
-		endpoint:     endpoint,
+		providerKind:  options.ProviderKind,
+		providerID:    options.ProviderID,
+		providerBuild: options.ProviderBuild,
+		schemaDigest:  options.SchemaDigest,
+		endpoint:      endpoint,
 	}
 	if !binding.valid() {
 		return Binding{}, ErrInvalidBinding
@@ -95,6 +100,14 @@ func (b Binding) ProviderID() plugin.ID {
 	return b.providerID
 }
 
+// ProviderBuild returns the selected implementation's Go module provenance.
+func (b Binding) ProviderBuild() audit.ModuleBuild {
+	if !b.valid() {
+		return audit.ModuleBuild{}
+	}
+	return b.providerBuild
+}
+
 // SchemaDigest returns the selected capability's canonical SHA-256 schema
 // digest.
 func (b Binding) SchemaDigest() [sha256.Size]byte {
@@ -105,7 +118,7 @@ func (b Binding) SchemaDigest() [sha256.Size]byte {
 }
 
 func (b Binding) valid() bool {
-	if !b.endpoint.valid() || b.schemaDigest == [sha256.Size]byte{} {
+	if !b.endpoint.valid() || !b.providerBuild.Valid() || b.schemaDigest == [sha256.Size]byte{} {
 		return false
 	}
 	switch b.providerKind {
