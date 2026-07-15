@@ -22,6 +22,8 @@ Runtime caller provenance uses immutable `audit.CallerIdentity` values. Kernel-o
 
 Capability failures use the closed `audit.ErrorCode` taxonomy and immutable `invocation.Error` boundary values. Only validated machine-readable classes and detail codes can cross the boundary; denials require an auditable reason, cancellation and timeout preserve their standard Go identities, and no provider cause or free-form message is stored.
 
+Runtime audit uses distinct `audit.RequestID`, `audit.TraceID`, and `audit.InvocationID` types backed by canonical non-zero 128-bit lower-case hexadecimal values. Root IDs are generated with cryptographic randomness, while external representations must pass the same strict parsers before entering runtime context.
+
 Concrete implementation identities are parsed separately by `plugin.ParseID`, for example `acme.email.smtp`. A Plugin ID is never a capability identity and carries no independent version; the containing Go Module supplies distribution versioning.
 
 Plugin configuration declarations use the strict DSL parsed by `plugin/manifest.ParseConfig`. Supported types are `string`, `integer`, `number`, `boolean`, `duration`, `url`, `secret`, `object`, and `array`; secret fields cannot contain defaults, and all generated defaults and enums have deterministic JSON forms.
