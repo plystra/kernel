@@ -16,6 +16,8 @@ An `invocation.Dispatcher` requires a positive default execution timeout and ato
 
 Runtime caller provenance uses immutable `audit.CallerIdentity` values. Kernel-owned callers have no fabricated Plugin ID, while plugin callers carry one exact canonical Plugin ID. Module build data, authenticated service identity, user or tenant identity, and transport metadata remain separate governed invocation facts.
 
+`Dispatcher.Scope` binds one validated caller identity to exactly one Dispatcher without exposing an invocation surface. Scopes can be staged before catalog publication and remain opaque to plugin code, allowing generated assembly to create caller-bound typed handles only after their contracts and dependency resolutions are known.
+
 Concrete implementation identities are parsed separately by `plugin.ParseID`, for example `acme.email.smtp`. A Plugin ID is never a capability identity and carries no independent version; the containing Go Module supplies distribution versioning.
 
 Plugin configuration declarations use the strict DSL parsed by `plugin/manifest.ParseConfig`. Supported types are `string`, `integer`, `number`, `boolean`, `duration`, `url`, `secret`, `object`, and `array`; secret fields cannot contain defaults, and all generated defaults and enums have deterministic JSON forms.
