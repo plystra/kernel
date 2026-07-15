@@ -12,6 +12,8 @@ Plugin configuration declarations use the strict DSL parsed by `plugin/manifest.
 
 The current `plugin.yaml` envelope is parsed by `plugin/manifest.ParsePlugin`. It requires a concrete `id` and accepts optional `provides`, `requires`, and `config` fields. Unknown fields, duplicate keys or capabilities, YAML references, multiple documents, and non-canonical identities are rejected.
 
+Capability contracts use the strict `plugin/manifest.ParseCapability` parser. A `capability.yaml` contains an exact `id`, optional description, request and response field mappings, and semantic error codes. Contract fields support the JSON-oriented `string`, `integer`, `number`, `boolean`, `object`, and typed `array` forms used by Go and JavaScript generation.
+
 ## Assembly compatibility
 
 Generated assembly source declares the assembly API version it targets. The Kernel validates that version through `assembly.RequireVersion` before accepting generated assembly metadata. The current contract is `assembly.V1`; incompatible versions fail explicitly instead of being interpreted by a different runtime contract.

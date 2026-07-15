@@ -113,7 +113,7 @@ func parseConfigNode(root *yaml.Node) (Config, error) {
 	for index := 0; index < len(root.Content); index += 2 {
 		key, value := root.Content[index], root.Content[index+1]
 		name, err := strictString(key)
-		if err != nil || !validConfigName(name) {
+		if err != nil || !validFieldName(name) {
 			return Config{}, invalidConfig("field name %q is not canonical lower snake case", key.Value)
 		}
 		if _, duplicate := seen[name]; duplicate {
@@ -454,7 +454,7 @@ func strictNumber(node *yaml.Node) (any, error) {
 	return value, nil
 }
 
-func validConfigName(value string) bool {
+func validFieldName(value string) bool {
 	if value == "" || len(value) > 128 || value[0] < 'a' || value[0] > 'z' {
 		return false
 	}
