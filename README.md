@@ -24,6 +24,8 @@ Capability failures use the closed `audit.ErrorCode` taxonomy and immutable `inv
 
 Runtime audit uses distinct `audit.RequestID`, `audit.TraceID`, and `audit.InvocationID` types backed by canonical non-zero 128-bit lower-case hexadecimal values. Root IDs are generated with cryptographic randomness, while external representations must pass the same strict parsers before entering runtime context.
 
+`audit.SubjectContext` carries bounded opaque subject and tenant or authorization-space references without making authentication or authorization a Kernel business domain. Anonymous access is represented by an explicitly constructed empty context; the zero value remains invalid so a missing ingress decision cannot silently become anonymous.
+
 Concrete implementation identities are parsed separately by `plugin.ParseID`, for example `acme.email.smtp`. A Plugin ID is never a capability identity and carries no independent version; the containing Go Module supplies distribution versioning.
 
 Plugin configuration declarations use the strict DSL parsed by `plugin/manifest.ParseConfig`. Supported types are `string`, `integer`, `number`, `boolean`, `duration`, `url`, `secret`, `object`, and `array`; secret fields cannot contain defaults, and all generated defaults and enums have deterministic JSON forms.
