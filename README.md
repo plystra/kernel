@@ -10,6 +10,8 @@ Typed capability declarations use `capability.Contract[Request, Response]`. Each
 
 `invocation.NewEndpoint` binds one typed contract to its handler while keeping type erasure inside the Kernel. Endpoints reject independently declared contract definitions, preserve typed nil values and provider errors, and recover panics as `invocation.ErrProviderPanic` without exposing panic payloads.
 
+`invocation.NewCatalog` accepts only validated, already-resolved endpoint bindings carrying their canonical schema digest and selected Kernel or Plugin provider identity. It performs no runtime provider selection, distinguishes exact capability versions, copies source state, and serves immutable lock-free lookups, including a valid empty catalog for zero-plugin applications.
+
 Concrete implementation identities are parsed separately by `plugin.ParseID`, for example `acme.email.smtp`. A Plugin ID is never a capability identity and carries no independent version; the containing Go Module supplies distribution versioning.
 
 Plugin configuration declarations use the strict DSL parsed by `plugin/manifest.ParseConfig`. Supported types are `string`, `integer`, `number`, `boolean`, `duration`, `url`, `secret`, `object`, and `array`; secret fields cannot contain defaults, and all generated defaults and enums have deterministic JSON forms.

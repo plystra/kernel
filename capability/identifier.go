@@ -59,10 +59,14 @@ func (i Identifier) Major() uint64 {
 // String returns the canonical capability identity, or an empty string for an
 // invalid zero value.
 func (i Identifier) String() string {
-	if i.name == "" || i.major == 0 {
+	if !i.valid() {
 		return ""
 	}
 	return i.name + "/v" + strconv.FormatUint(i.major, 10)
+}
+
+func (i Identifier) valid() bool {
+	return i.name != "" && i.major != 0
 }
 
 func validName(name string) bool {

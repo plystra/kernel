@@ -27,7 +27,7 @@ func (d Definition) Identifier() Identifier {
 // Valid reports whether the definition came from a successful contract
 // declaration.
 func (d Definition) Valid() bool {
-	return d.identifier.String() != "" && d.token != nil
+	return d.identifier.valid() && d.token != nil
 }
 
 // Contract binds one exact capability identity to its typed Go request and
@@ -42,7 +42,7 @@ type Contract[Request, Response any] struct {
 
 // NewContract declares one typed capability contract.
 func NewContract[Request, Response any](identifier Identifier) (Contract[Request, Response], error) {
-	if identifier.String() == "" {
+	if !identifier.valid() {
 		return Contract[Request, Response]{}, ErrInvalidContract
 	}
 	return Contract[Request, Response]{
