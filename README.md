@@ -6,6 +6,8 @@ The module is intentionally independent from the CLI and from official plugin mo
 
 Provider-independent capability identities are parsed by `capability.ParseIdentifier`. Exact major versions are mandatory and canonical, for example `email.send/v1`; callers never encode a provider or Go Module in that identity.
 
+Typed capability declarations use `capability.Contract[Request, Response]`. Each successful declaration has an opaque identity shared by its copies, preventing independently declared Go types from being wired together merely because their textual capability IDs match; `capability.Handler` defines the corresponding implementation function shape.
+
 Concrete implementation identities are parsed separately by `plugin.ParseID`, for example `acme.email.smtp`. A Plugin ID is never a capability identity and carries no independent version; the containing Go Module supplies distribution versioning.
 
 Plugin configuration declarations use the strict DSL parsed by `plugin/manifest.ParseConfig`. Supported types are `string`, `integer`, `number`, `boolean`, `duration`, `url`, `secret`, `object`, and `array`; secret fields cannot contain defaults, and all generated defaults and enums have deterministic JSON forms.
