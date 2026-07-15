@@ -34,7 +34,7 @@ func NewIdentifier(name string, major uint64) (Identifier, error) {
 func ParseIdentifier(value string) (Identifier, error) {
 	name, version, ok := strings.Cut(value, "/")
 	if !ok || strings.Contains(version, "/") || len(version) < 2 || version[0] != 'v' {
-		return Identifier{}, fmt.Errorf("%w: expected <namespace>.<operation>/v<major>", ErrInvalidIdentifier)
+		return Identifier{}, fmt.Errorf("%w: expected <capability-name>/v<major>", ErrInvalidIdentifier)
 	}
 	if version[1] == '0' {
 		return Identifier{}, fmt.Errorf("%w: major version must not have a leading zero", ErrInvalidIdentifier)
@@ -86,19 +86,13 @@ func validSegment(segment string) bool {
 	if segment == "" || !isLowerASCII(segment[0]) {
 		return false
 	}
-	previousHyphen := false
 	for index := 1; index < len(segment); index++ {
 		character := segment[index]
-		switch {
-		case isLowerASCII(character), isDigitASCII(character):
-			previousHyphen = false
-		case character == '-' && !previousHyphen:
-			previousHyphen = true
-		default:
+		if !isLowerASCII(character) && !isDigitASCII(character) && character != '-' {
 			return false
 		}
 	}
-	return !previousHyphen
+	return true
 }
 
 func isLowerASCII(character byte) bool {

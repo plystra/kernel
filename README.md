@@ -76,7 +76,7 @@ CLI-generated application invocation audit and explicit business audit events ar
 
 ## Capability and plugin contracts
 
-Provider-independent identities use the exact form `<namespace>.<operation>/v<number>`, such as `email.send/v1`. Callers never encode a Plugin ID or Go Module in a Capability identity.
+Provider-independent identities use the exact form `<capability-name>/v<number>`, such as `email.send/v1` or `authn.login.oidc.complete/v1`. A capability name has at least two dot-separated segments; each starts with a lower-case letter and continues with lower-case letters, digits, or hyphens. Segment count expresses logical hierarchy and never implies a fixed namespace/operation split. Callers never encode a Plugin ID or Go Module in a Capability identity.
 
 Capability contracts, semantic errors, canonical schema digests, official catalog definitions, Plugin IDs, strict plugin manifests, and typed configuration declarations use stable Kernel packages consumed by plugins and the CLI. Exact official versions are immutable; providers of the same identity must use semantically identical schemas.
 

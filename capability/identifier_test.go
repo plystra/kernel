@@ -17,6 +17,10 @@ func TestParseIdentifier(t *testing.T) {
 	}{
 		{value: "email.send/v1", wantName: "email.send", wantMajor: 1},
 		{value: "workspace.invite-member/v12", wantName: "workspace.invite-member", wantMajor: 12},
+		{value: "authn.login.password/v1", wantName: "authn.login.password", wantMajor: 1},
+		{value: "authn.login.oidc.complete/v1", wantName: "authn.login.oidc.complete", wantMajor: 1},
+		{value: "authn.passkey.challenge.create/v1", wantName: "authn.passkey.challenge.create", wantMajor: 1},
+		{value: "workflow.retry--now-/v2", wantName: "workflow.retry--now-", wantMajor: 2},
 		{value: "storage.object.put/v18446744073709551615", wantName: "storage.object.put", wantMajor: ^uint64(0)},
 	}
 
@@ -57,8 +61,8 @@ func TestParseIdentifierRejectsInvalidValues(t *testing.T) {
 		"email_send/v1",
 		"email..send/v1",
 		"email.-send/v1",
-		"email.send-/v1",
-		"email.send--now/v1",
+		"email.1send/v1",
+		"email.send_/v1",
 		"email.send/v1/extra",
 		" email.send/v1",
 		"email.send/v1 ",
@@ -123,6 +127,8 @@ func FuzzParseIdentifier(f *testing.F) {
 	for _, seed := range []string{
 		"email.send/v1",
 		"workspace.invite-member/v12",
+		"authn.login.oidc.complete/v1",
+		"workflow.retry--now-/v2",
 		"bad",
 		"email.send/v0",
 		"邮件.send/v1",
