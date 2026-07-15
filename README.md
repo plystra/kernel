@@ -1,62 +1,90 @@
 # Plystra Kernel
 
-`github.com/plystra/kernel` is the runtime half of Plystra Core. It exposes the stable Go APIs used by plugins and by source generated through the Plystra CLI.
+`github.com/plystra/kernel` is the runtime half of Plystra Core. It exposes stable Go APIs used by plugins and by application source generated through the Plystra CLI.
 
-The module is intentionally independent from the CLI and from official plugin modules. Authentication and authorization implementations belong in `github.com/plystra/authn` and `github.com/plystra/authz`, not in the Kernel. The Kernel owns no `User` model, account lifecycle, user persistence, user CRUD API, credentials, or user-specific attributes; applications without AuthN or a user system remain valid.
+Plystra Core is exactly:
 
-Provider-independent capability identities are parsed by `capability.ParseIdentifier`. Exact major versions are mandatory and canonical, for example `email.send/v1`; callers never encode a provider or Go Module in that identity.
+```text
+Kernel + CLI
+```
 
-Typed capability declarations use `capability.Contract[Request, Response]`. Each successful declaration has an opaque identity shared by its copies, preventing independently declared Go types from being wired together merely because their textual capability IDs match; `capability.Handler` defines the corresponding implementation function shape.
+The Kernel is intrinsically complete. It does not depend on the CLI at runtime and never consumes an ordinary plugin Capability or service to implement a Kernel function.
 
-`invocation.NewEndpoint` binds one typed contract to its handler while keeping type erasure inside the Kernel. Endpoints reject independently declared contract definitions, preserve typed nil values and provider errors, and recover panics as `invocation.ErrProviderPanic` without exposing panic payloads.
+## Runtime responsibilities
 
-`invocation.NewCatalog` accepts only validated, already-resolved endpoint bindings carrying their canonical schema digest, selected Kernel or Plugin provider identity, and immutable Go module build provenance. Missing provider-build metadata fails closed before publication. The catalog performs no runtime provider selection, distinguishes exact capability versions, copies source state, and serves immutable lock-free lookups, including a valid empty catalog for zero-plugin applications.
+The Kernel owns:
 
-An `invocation.Dispatcher` requires a positive default execution timeout, an explicit capability authorizer, and a validated invocation audit recorder, then atomically publishes one complete copied catalog exactly once. Missing authorization or audit policy fails construction rather than defaulting to allow or silently running unaudited. Before publication the Dispatcher is explicitly not ready; failed validation leaves it unpublished, concurrent publishers have one winner, and readers observe either no catalog or one complete immutable snapshot.
+- One immutable already-resolved provider registry.
+- Exact typed in-process Capability lookup and dispatch.
+- Provider lifecycle and graceful startup and shutdown.
+- Validated typed runtime configuration injection.
+- Ordinary Go `context.Context`, deadlines, cancellation, trace data, and bounded opaque metadata propagation.
+- Panic recovery and safe typed error normalization.
+- Runtime concurrency, timeout, queue, buffering, and memory limits.
+- Intrinsic logs, metrics, traces, health, and implementation diagnostics.
+- Reserved intrinsic `kernel.*` Capabilities.
+- Stable plugin-facing and generated-assembly APIs.
 
-Runtime caller provenance uses immutable `audit.CallerIdentity` values. Kernel-owned callers have no fabricated Plugin ID, while plugin callers carry one exact canonical Plugin ID. Module build data, the caller Principal or security subject, optional authorization-boundary references, and transport metadata remain separate governed invocation facts.
+The Kernel does not:
 
-`Dispatcher.Scope` binds one validated caller identity to exactly one Dispatcher without exposing an invocation surface. Scopes can be staged before catalog publication and remain opaque to plugin code, allowing generated assembly to create caller-bound typed handles only after their contracts and dependency resolutions are known.
+- Own a User, account, Person, profile, Member, Space, credential, session, token, permission, or policy model.
+- Define an application-wide identity abstraction.
+- Authenticate application callers or authorize business operations.
+- Call AuthN, AuthZ, Audit, or another plugin before or after target dispatch.
+- Depend on a plugin for logging, health, security, storage, transport, lifecycle, tracing, metrics, configuration, or another intrinsic feature.
+- Scan Go Modules, choose providers, evaluate plugin build-time rules, or generate application code at runtime.
 
-`invocation.NewHandle` turns a scope, exact typed contract, and generated provider-availability result into a typed capability reference. Both generic type arguments are part of its representation. `Handle.Invoke` performs exact immutable-catalog lookup, enters a deadline-bound child invocation context, applies mandatory authorization, invokes only the resolved typed endpoint, normalizes every failure to a safe closed error, and records the complete terminal audit envelope before exposing a result. Unavailable handles and missing governed contexts fail without calling a provider. If terminal audit delivery fails, a call that entered provider execution returns `result_unknown`; a pre-execution call returns `unavailable`.
+Applications without AuthN, AuthZ, a User model, or any ordinary plugin remain valid.
 
-Capability failures use the closed `audit.ErrorCode` taxonomy, immutable `invocation.Error` boundary values, and matching terminal `audit.Outcome` states. Only validated machine-readable classes and detail codes can cross the boundary; denials require an auditable reason, cancellation and timeout preserve their standard Go identities, and no provider cause or free-form message is stored.
+## Dispatch boundary
 
-`audit.InvocationRecord` is the immutable terminal envelope for one governed capability call. It binds the exact capability and canonical schema digest to runtime caller provenance, the selected Kernel or Plugin provider and its module build, the provider-neutral security context, request and invocation ancestry, local or remote execution, canonical UTC timing, monotonic duration, and a closed outcome. It deliberately stores no request or response payload, credential, provider error, panic value, stack trace, or User record.
+The CLI resolves providers and generates the supported invocation path before build:
 
-`audit.InvocationRecorder` is the mandatory validated handoff to an `audit.InvocationSink`. Each acceptance and shutdown flush has an independent bounded timeout, caller cancellation cannot suppress terminal audit delivery, and sink errors, timeouts, or panics become one redacted failure. A synchronous sink may persist before returning; an asynchronous sink must use a bounded queue, report saturation instead of silently dropping records, and surface deferred persistence failures when flushed.
+```text
+generated HTTP adapter, SDK adapter, or Capability client
+-> generated application preparation and checks
+-> Kernel exact dispatch
+-> selected in-process provider
+```
 
-Runtime audit uses distinct `audit.RequestID`, `audit.TraceID`, and `audit.InvocationID` types backed by canonical non-zero 128-bit lower-case hexadecimal values. Root IDs are generated with cryptographic randomness, while external representations must pass the same strict parsers before entering runtime context.
+The Kernel receives one complete immutable registry. It distinguishes exact Capability versions, performs no runtime provider selection, and never starts with silently missing application requirements.
 
-`audit.ModuleBuild` carries bounded immutable provider provenance using a canonical Go module path plus a canonical matching module version, a safe generated or VCS build identity, or both. Development modules without a version must still provide a build identity. This embedded observability fact never replaces `go.mod`, `go.sum`, or Go's dependency resolution.
+Go plugins share one process and are not sandboxed. Generated Capability clients are the supported application API; raw dispatch remains a low-level Kernel boundary rather than an encouraged bypass for ordinary plugin code.
 
-`audit.Principal` is the Kernel's minimal domain-neutral security-subject reference, not a full User object. It represents an explicit anonymous caller, User, service, plugin, system process, device, or another bounded extensible principal kind using only an opaque subject identifier, kind, and optional issuer. Its zero value is invalid, and unsafe references fail without exposing rejected input. AuthN resolves credentials and authentication identities to a Principal, AuthZ consumes it for authorization, and the Kernel neither interprets nor queries the User behind it. `Principal` is a runtime security-context type, not a fifth top-level public concept.
+## Context and configuration
 
-`audit.SecurityContext` binds a required caller Principal, an optional distinct subject Principal, and bounded opaque Member, authorization-boundary, AuthN-context, and AuthZ-context references. An omitted subject defaults to the caller, while anonymous access requires an explicit anonymous Principal; zero and unsafe contexts fail closed. The Kernel propagates this immutable context without interpreting any referenced domain data.
+The Kernel propagates ordinary Go context, cancellation, deadlines, trace correlation, and bounded opaque metadata without interpreting application identity. Generated code may carry typed AuthN-owned or AuthZ-owned values, but those remain application data.
 
-Protected dispatch may use minimal trusted AuthN and AuthZ hooks to establish a Principal and make authorization decisions before ordinary capability entry. Those hooks must not recursively traverse the same protected dispatch path they govern. Login, logout, token refresh, account management, policy administration, and business-facing permission checks remain ordinary versioned capabilities. The Kernel owns only hook contracts, sequencing, security-context propagation, failure handling, auditing, and governance; AuthN and AuthZ own the corresponding domain behavior.
+Runtime configuration is validated and resolved through intrinsic Kernel facilities, then injected only into the owning plugin as typed data. One selected Plugin ID has one configuration object. Secret values never enter generated source, manifests, logs, traces, diagnostics, errors, or intrinsic Capability responses.
 
-`Scope.NewRootContext` lets only an explicit Kernel caller mint a root runtime frame with cryptographic request and trace IDs plus a validated Principal security context. Existing or malformed frames, plugin callers, and missing inputs fail closed. The frame retains the original trusted deadline and cancellation authority even if ordinary Go cancellation is later detached.
+## Intrinsic Capabilities
 
-Each governed provider entry derives an immutable child frame with a unique invocation ID and immediate parent ancestry. The effective deadline is the earliest configured, caller, or trusted-frame deadline, and trusted cancellation remains linked through detached Go contexts. Providers can inspect only the safe request, trace, ancestry, Principal security context, and deadline snapshot through `invocation.Current`; root frames, cancellation authority, and mutable runtime state are not exposed.
+Reserved identities include:
 
-Capability authorization receives an immutable Kernel-owned request containing runtime caller provenance, the provider-independent capability identity, the caller and subject Principals with opaque security-context references, and audit correlation IDs. Policies must return an explicit valid allow or stable-code denial; a missing policy, zero or malformed decision, callback error, or panic fails closed without retaining policy implementation details. Selected provider identity is deliberately outside the authorization request so provider replacement cannot change caller permission.
+```text
+kernel.health/v1
+kernel.info/v1
+```
 
-Concrete implementation identities are parsed separately by `plugin.ParseID`, for example `acme.email.smtp`. A Plugin ID is never a capability identity and carries no independent version; the containing Go Module supplies distribution versioning.
+They are implemented directly by the Kernel, require no ordinary provider or `capabilities.use` entry, cannot be overridden by plugins, and remain available regardless of the selected application plugin set. HTTP exposure is still explicit, and responses redact private configuration, Secrets, sensitive paths, and unsafe build details.
 
-Plugin configuration declarations use the strict DSL parsed by `plugin/manifest.ParseConfig`. Supported types are `string`, `integer`, `number`, `boolean`, `duration`, `url`, `secret`, `object`, and `array`; secret fields cannot contain defaults, and all generated defaults and enums have deterministic JSON forms.
+## Telemetry and audit
 
-The current `plugin.yaml` envelope is parsed by `plugin/manifest.ParsePlugin`. It requires a concrete `id` and accepts optional `provides`, `requires`, and `config` fields. Unknown fields, duplicate keys or capabilities, YAML references, multiple documents, and non-canonical identities are rejected.
+The Kernel emits its own bounded runtime logs, metrics, traces, health state, and implementation diagnostics. It never calls `audit.write/v1`.
 
-Capability contracts use the strict `plugin/manifest.ParseCapability` parser. A `capability.yaml` contains an exact `id`, optional description, request and response field mappings, and semantic error codes. Contract fields support the JSON-oriented `string`, `integer`, `number`, `boolean`, `object`, and typed `array` forms used by Go and JavaScript generation.
+CLI-generated application invocation audit and explicit business audit events are separate application concerns. Removing an Audit plugin can remove its generated application behavior but cannot change Kernel telemetry or dispatch.
 
-`Capability.CanonicalSchemaJSON` removes source-only differences and `Capability.SchemaDigest` derives its stable SHA-256 fingerprint. Field, enum, and error order, YAML formatting, descriptions, and explicit false values do not change the wire schema; identities, types, required fields, and semantic errors do.
+## Capability and plugin contracts
 
-The immutable `capability/catalog` package distributes official definitions with the Kernel. `catalog.Lookup` and `catalog.Definitions` expose validated contracts, semantic schema digests, and defensive copies of canonical LF-only source suitable for CLI materialization; the initial catalog includes the documented `email.send/v1` contract.
+Provider-independent identities use the exact form `<namespace>.<operation>/v<number>`, such as `email.send/v1`. Callers never encode a Plugin ID or Go Module in a Capability identity.
+
+Capability contracts, semantic errors, canonical schema digests, official catalog definitions, Plugin IDs, strict plugin manifests, and typed configuration declarations use stable Kernel packages consumed by plugins and the CLI. Exact official versions are immutable; providers of the same identity must use semantically identical schemas.
+
+There is no separately distributed Go Plugin SDK. Plugins and generated source depend directly on the stable Kernel API.
 
 ## Assembly compatibility
 
-Generated assembly source declares the assembly API version it targets. The Kernel validates that version through `assembly.RequireVersion` before accepting generated assembly metadata. The current contract is `assembly.V1`; incompatible versions fail explicitly instead of being interpreted by a different runtime contract.
+Generated assembly declares the exact Kernel assembly API version it targets. The Kernel rejects incompatible assembly metadata explicitly rather than interpreting it under a different contract.
 
 ## Development
 
