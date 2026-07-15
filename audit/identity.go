@@ -19,9 +19,9 @@ const (
 	CallerKindPlugin CallerKind = "plugin"
 )
 
-// CallerIdentity is immutable logical provenance for one runtime caller.
-// Module build data, authenticated service identity, user or tenant identity,
-// and transport metadata are separate governed invocation facts.
+// CallerIdentity is immutable logical provenance for the Kernel or plugin code
+// making one runtime call. Module build data, Principal security context, and
+// transport metadata are separate governed invocation facts.
 type CallerIdentity struct {
 	kind     CallerKind
 	pluginID plugin.ID

@@ -21,13 +21,13 @@ var (
 // It deliberately identifies the requested capability rather than the selected
 // provider so provider replacement cannot change caller authorization.
 type AuthorizationRequest struct {
-	caller       audit.CallerIdentity
-	capability   capability.Identifier
-	requestID    audit.RequestID
-	traceID      audit.TraceID
-	invocationID audit.InvocationID
-	parentID     audit.InvocationID
-	subject      audit.SubjectContext
+	runtimeCaller audit.CallerIdentity
+	capability    capability.Identifier
+	requestID     audit.RequestID
+	traceID       audit.TraceID
+	invocationID  audit.InvocationID
+	parentID      audit.InvocationID
+	security      audit.SecurityContext
 }
 
 // Authorizer applies runtime policy to one governed capability request. It must
@@ -87,12 +87,13 @@ func (d AuthorizationDecision) Valid() bool {
 	}
 }
 
-// Caller returns the logical Kernel or plugin caller provenance.
-func (r AuthorizationRequest) Caller() audit.CallerIdentity {
+// RuntimeCaller returns the logical Kernel or plugin code provenance. It is
+// distinct from the caller Principal in SecurityContext.
+func (r AuthorizationRequest) RuntimeCaller() audit.CallerIdentity {
 	if !r.Valid() {
 		return audit.CallerIdentity{}
 	}
-	return r.caller
+	return r.runtimeCaller
 }
 
 // Capability returns the exact provider-independent capability identity.
@@ -136,26 +137,19 @@ func (r AuthorizationRequest) ParentInvocationID() audit.InvocationID {
 	return r.parentID
 }
 
-// SubjectIdentity returns the optional authenticated subject reference.
-func (r AuthorizationRequest) SubjectIdentity() string {
+// SecurityContext returns the provider-neutral caller and subject Principals
+// plus optional opaque authentication and authorization references.
+func (r AuthorizationRequest) SecurityContext() audit.SecurityContext {
 	if !r.Valid() {
-		return ""
+		return audit.SecurityContext{}
 	}
-	return r.subject.SubjectIdentity()
-}
-
-// TenantIdentity returns the optional tenant or authorization-space reference.
-func (r AuthorizationRequest) TenantIdentity() string {
-	if !r.Valid() {
-		return ""
-	}
-	return r.subject.TenantIdentity()
+	return r.security
 }
 
 // Valid reports whether this request contains one complete governed invocation.
 func (r AuthorizationRequest) Valid() bool {
-	return r.caller.Valid() && r.capability.String() != "" && r.requestID.Valid() && r.traceID.Valid() &&
-		r.invocationID.Valid() && r.subject.Valid() && r.invocationID != r.parentID
+	return r.runtimeCaller.Valid() && r.capability.String() != "" && r.requestID.Valid() && r.traceID.Valid() &&
+		r.invocationID.Valid() && r.security.Valid() && r.invocationID != r.parentID
 }
 
 func newAuthorizationRequest(ctx context.Context, scope Scope, identifier capability.Identifier) (AuthorizationRequest, error) {
@@ -167,13 +161,13 @@ func newAuthorizationRequest(ctx context.Context, scope Scope, identifier capabi
 		return AuthorizationRequest{}, ErrInvalidAuthorization
 	}
 	request := AuthorizationRequest{
-		caller:       scope.caller,
-		capability:   identifier,
-		requestID:    frame.requestID,
-		traceID:      frame.traceID,
-		invocationID: frame.invocationID,
-		parentID:     frame.parentID,
-		subject:      frame.subject,
+		runtimeCaller: scope.caller,
+		capability:    identifier,
+		requestID:     frame.requestID,
+		traceID:       frame.traceID,
+		invocationID:  frame.invocationID,
+		parentID:      frame.parentID,
+		security:      frame.security,
 	}
 	if !request.Valid() {
 		return AuthorizationRequest{}, ErrInvalidAuthorization

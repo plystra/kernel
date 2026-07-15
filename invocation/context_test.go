@@ -16,12 +16,9 @@ func TestKernelScopeMintsRootContext(t *testing.T) {
 	t.Parallel()
 
 	scope := testHandleScope(t)
-	subject, err := audit.NewSubjectContext("subject:01", "tenant:west")
-	if err != nil {
-		t.Fatalf("NewSubjectContext: %v", err)
-	}
+	security := testGovernedSecurityContext(t)
 	parent := context.WithValue(context.Background(), rootContextValueKey{}, "preserved")
-	root, err := scope.NewRootContext(parent, subject)
+	root, err := scope.NewRootContext(parent, security)
 	if err != nil {
 		t.Fatalf("NewRootContext: %v", err)
 	}
@@ -35,7 +32,7 @@ func TestKernelScopeMintsRootContext(t *testing.T) {
 	if !frame.requestID.Valid() || !frame.traceID.Valid() || frame.requestID.String() == frame.traceID.String() {
 		t.Fatalf("root identities = %q / %q", frame.requestID, frame.traceID)
 	}
-	if frame.invocationID.Valid() || frame.parentID.Valid() || frame.subject != subject || frame.authority != parent || !frame.deadline.IsZero() {
+	if frame.invocationID.Valid() || frame.parentID.Valid() || frame.security != security || frame.authority != parent || !frame.deadline.IsZero() {
 		t.Fatalf("root frame fields = %#v", frame)
 	}
 	requestID, requestExists := RequestID(root)
@@ -55,13 +52,10 @@ func TestRootContextPreservesTrustedDeadlineAndCancellationAuthority(t *testing.
 	t.Parallel()
 
 	scope := testHandleScope(t)
-	subject, err := audit.NewSubjectContext("", "")
-	if err != nil {
-		t.Fatalf("NewSubjectContext: %v", err)
-	}
+	security := testAnonymousSecurityContext(t)
 	deadline := time.Now().Add(time.Minute)
 	authority, cancelDeadline := context.WithDeadline(context.Background(), deadline)
-	root, err := scope.NewRootContext(authority, subject)
+	root, err := scope.NewRootContext(authority, security)
 	if err != nil {
 		cancelDeadline()
 		t.Fatalf("NewRootContext: %v", err)
@@ -88,10 +82,7 @@ func TestRootContextPreservesTrustedDeadlineAndCancellationAuthority(t *testing.
 func TestRootContextRejectsUntrustedInputsAndReplacement(t *testing.T) {
 	t.Parallel()
 
-	subject, err := audit.NewSubjectContext("", "")
-	if err != nil {
-		t.Fatalf("NewSubjectContext: %v", err)
-	}
+	security := testAnonymousSecurityContext(t)
 	kernelScope := testHandleScope(t)
 	dispatcher := newTestDispatcher(t)
 	pluginID, err := plugin.ParseID("acme.context.caller")
@@ -106,25 +97,25 @@ func TestRootContextRejectsUntrustedInputsAndReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Scope: %v", err)
 	}
-	root, err := kernelScope.NewRootContext(context.Background(), subject)
+	root, err := kernelScope.NewRootContext(context.Background(), security)
 	if err != nil {
 		t.Fatalf("NewRootContext: %v", err)
 	}
 	corrupt := context.WithValue(context.Background(), runtimeFrameKey{}, runtimeFrame{})
 	for _, test := range []struct {
-		name    string
-		scope   Scope
-		parent  context.Context
-		subject audit.SubjectContext
+		name     string
+		scope    Scope
+		parent   context.Context
+		security audit.SecurityContext
 	}{
-		{name: "zero scope", parent: context.Background(), subject: subject},
-		{name: "plugin scope", scope: pluginScope, parent: context.Background(), subject: subject},
-		{name: "nil parent", scope: kernelScope, subject: subject},
-		{name: "zero subject", scope: kernelScope, parent: context.Background()},
-		{name: "nested root", scope: kernelScope, parent: root, subject: subject},
-		{name: "corrupt existing frame", scope: kernelScope, parent: corrupt, subject: subject},
+		{name: "zero scope", parent: context.Background(), security: security},
+		{name: "plugin scope", scope: pluginScope, parent: context.Background(), security: security},
+		{name: "nil parent", scope: kernelScope, security: security},
+		{name: "zero security context", scope: kernelScope, parent: context.Background()},
+		{name: "nested root", scope: kernelScope, parent: root, security: security},
+		{name: "corrupt existing frame", scope: kernelScope, parent: corrupt, security: security},
 	} {
-		created, err := test.scope.NewRootContext(test.parent, test.subject)
+		created, err := test.scope.NewRootContext(test.parent, test.security)
 		if !errors.Is(err, ErrInvalidInvocationContext) || created != nil {
 			t.Fatalf("%s NewRootContext = %#v, %v", test.name, created, err)
 		}
@@ -144,7 +135,7 @@ func TestRuntimeContextAccessorsFailClosed(t *testing.T) {
 		if frame, exists := runtimeFrameFrom(ctx); exists || frame.validRoot() {
 			t.Fatalf("runtimeFrameFrom(%#v) = %#v, %t", ctx, frame, exists)
 		}
-		if current, exists := Current(ctx); exists || current.RequestID().Valid() || current.TraceID().Valid() || current.InvocationID().Valid() || current.ParentInvocationID().Valid() || current.SubjectIdentity() != "" || current.TenantIdentity() != "" || !current.Deadline().IsZero() {
+		if current, exists := Current(ctx); exists || current.RequestID().Valid() || current.TraceID().Valid() || current.InvocationID().Valid() || current.ParentInvocationID().Valid() || current.SecurityContext().Valid() || !current.Deadline().IsZero() {
 			t.Fatalf("Current(%#v) = %#v, %t", ctx, current, exists)
 		}
 	}
@@ -154,11 +145,8 @@ func TestEnterInvocationContextPreservesGovernedAncestry(t *testing.T) {
 	t.Parallel()
 
 	scope := testHandleScope(t)
-	subject, err := audit.NewSubjectContext("subject:operator", "tenant:west")
-	if err != nil {
-		t.Fatalf("NewSubjectContext: %v", err)
-	}
-	root, err := scope.NewRootContext(context.Background(), subject)
+	security := testGovernedSecurityContext(t)
+	root, err := scope.NewRootContext(context.Background(), security)
 	if err != nil {
 		t.Fatalf("NewRootContext: %v", err)
 	}
@@ -180,7 +168,7 @@ func TestEnterInvocationContextPreservesGovernedAncestry(t *testing.T) {
 	if outerCurrent.RequestID() != requestID || outerCurrent.TraceID() != traceID || outerCurrent.InvocationID() != outerID || outerCurrent.ParentInvocationID().Valid() {
 		t.Fatalf("outer identities = %#v", outerCurrent)
 	}
-	if outerCurrent.SubjectIdentity() != "subject:operator" || outerCurrent.TenantIdentity() != "tenant:west" || !outerCurrent.Deadline().Equal(outerDeadline) {
+	if outerCurrent.SecurityContext() != security || !outerCurrent.Deadline().Equal(outerDeadline) {
 		t.Fatalf("outer governed values = %#v", outerCurrent)
 	}
 
@@ -196,7 +184,7 @@ func TestEnterInvocationContextPreservesGovernedAncestry(t *testing.T) {
 	if innerCurrent.RequestID() != requestID || innerCurrent.TraceID() != traceID || innerCurrent.InvocationID() != innerID || innerCurrent.ParentInvocationID() != outerID {
 		t.Fatalf("inner identities = %#v", innerCurrent)
 	}
-	if innerCurrent.SubjectIdentity() != outerCurrent.SubjectIdentity() || innerCurrent.TenantIdentity() != outerCurrent.TenantIdentity() || !innerCurrent.Deadline().Equal(outerDeadline) {
+	if innerCurrent.SecurityContext() != outerCurrent.SecurityContext() || !innerCurrent.Deadline().Equal(outerDeadline) {
 		t.Fatalf("inner governed values = %#v", innerCurrent)
 	}
 	if unchanged, _ := Current(outer); unchanged != outerCurrent {
@@ -211,13 +199,10 @@ func TestEnterInvocationContextChoosesEarliestDeadline(t *testing.T) {
 	t.Parallel()
 
 	scope := testHandleScope(t)
-	subject, err := audit.NewSubjectContext("", "")
-	if err != nil {
-		t.Fatalf("NewSubjectContext: %v", err)
-	}
+	security := testAnonymousSecurityContext(t)
 
 	t.Run("configured default", func(t *testing.T) {
-		root, err := scope.NewRootContext(context.Background(), subject)
+		root, err := scope.NewRootContext(context.Background(), security)
 		if err != nil {
 			t.Fatalf("NewRootContext: %v", err)
 		}
@@ -240,7 +225,7 @@ func TestEnterInvocationContextChoosesEarliestDeadline(t *testing.T) {
 	})
 
 	t.Run("ordinary caller", func(t *testing.T) {
-		root, err := scope.NewRootContext(context.Background(), subject)
+		root, err := scope.NewRootContext(context.Background(), security)
 		if err != nil {
 			t.Fatalf("NewRootContext: %v", err)
 		}
@@ -262,7 +247,7 @@ func TestEnterInvocationContextChoosesEarliestDeadline(t *testing.T) {
 		trustedDeadline := time.Now().Add(time.Minute)
 		authority, cancelAuthority := context.WithDeadline(context.Background(), trustedDeadline)
 		defer cancelAuthority()
-		root, err := scope.NewRootContext(authority, subject)
+		root, err := scope.NewRootContext(authority, security)
 		if err != nil {
 			t.Fatalf("NewRootContext: %v", err)
 		}
@@ -286,14 +271,11 @@ func TestEnterInvocationContextLinksTrustedCancellationAndCleansUp(t *testing.T)
 	t.Parallel()
 
 	scope := testHandleScope(t)
-	subject, err := audit.NewSubjectContext("", "")
-	if err != nil {
-		t.Fatalf("NewSubjectContext: %v", err)
-	}
+	security := testAnonymousSecurityContext(t)
 
 	t.Run("detached cancellation", func(t *testing.T) {
 		authority, cancelAuthority := context.WithCancel(context.Background())
-		root, err := scope.NewRootContext(authority, subject)
+		root, err := scope.NewRootContext(authority, security)
 		if err != nil {
 			cancelAuthority()
 			t.Fatalf("NewRootContext: %v", err)
@@ -318,7 +300,7 @@ func TestEnterInvocationContextLinksTrustedCancellationAndCleansUp(t *testing.T)
 
 	t.Run("already cancelled authority", func(t *testing.T) {
 		authority, cancelAuthority := context.WithCancel(context.Background())
-		root, err := scope.NewRootContext(authority, subject)
+		root, err := scope.NewRootContext(authority, security)
 		if err != nil {
 			cancelAuthority()
 			t.Fatalf("NewRootContext: %v", err)
@@ -340,7 +322,7 @@ func TestEnterInvocationContextLinksTrustedCancellationAndCleansUp(t *testing.T)
 	})
 
 	t.Run("cleanup", func(t *testing.T) {
-		root, err := scope.NewRootContext(context.Background(), subject)
+		root, err := scope.NewRootContext(context.Background(), security)
 		if err != nil {
 			t.Fatalf("NewRootContext: %v", err)
 		}
@@ -360,11 +342,8 @@ func TestEnterInvocationContextRejectsInvalidInputs(t *testing.T) {
 	t.Parallel()
 
 	scope := testHandleScope(t)
-	subject, err := audit.NewSubjectContext("", "")
-	if err != nil {
-		t.Fatalf("NewSubjectContext: %v", err)
-	}
-	root, err := scope.NewRootContext(context.Background(), subject)
+	security := testAnonymousSecurityContext(t)
+	root, err := scope.NewRootContext(context.Background(), security)
 	if err != nil {
 		t.Fatalf("NewRootContext: %v", err)
 	}
@@ -406,4 +385,39 @@ func testInvocationID(t *testing.T, value string) audit.InvocationID {
 		t.Fatalf("ParseInvocationID(%q): %v", value, err)
 	}
 	return id
+}
+
+func testAnonymousSecurityContext(t *testing.T) audit.SecurityContext {
+	t.Helper()
+	return mustSecurityContext(t, audit.SecurityContextOptions{CallerPrincipal: audit.NewAnonymousPrincipal()})
+}
+
+func testGovernedSecurityContext(t *testing.T) audit.SecurityContext {
+	t.Helper()
+	return mustSecurityContext(t, audit.SecurityContextOptions{
+		CallerPrincipal:                mustPrincipal(t, audit.PrincipalKindService, "gateway:west", "spiffe://example.test/gateway"),
+		SubjectPrincipal:               mustPrincipal(t, audit.PrincipalKindUser, "user:operator", "https://identity.example.test"),
+		MemberReference:                "member:west:01",
+		AuthorizationBoundaryReference: "tenant:west",
+		AuthenticationContextReference: "authn:session:01",
+		AuthorizationContextReference:  "authz:decision:01",
+	})
+}
+
+func mustPrincipal(t *testing.T, kind audit.PrincipalKind, subject, issuer string) audit.Principal {
+	t.Helper()
+	principal, err := audit.NewPrincipal(kind, subject, issuer)
+	if err != nil {
+		t.Fatalf("NewPrincipal: %v", err)
+	}
+	return principal
+}
+
+func mustSecurityContext(t *testing.T, options audit.SecurityContextOptions) audit.SecurityContext {
+	t.Helper()
+	security, err := audit.NewSecurityContext(options)
+	if err != nil {
+		t.Fatalf("NewSecurityContext: %v", err)
+	}
+	return security
 }

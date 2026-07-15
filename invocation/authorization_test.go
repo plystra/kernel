@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/plystra/kernel/audit"
 	"github.com/plystra/kernel/capability"
 )
 
@@ -14,11 +13,8 @@ func TestAuthorizationRequestCarriesOnlyGovernedFacts(t *testing.T) {
 	t.Parallel()
 
 	scope := testHandleScope(t)
-	subject, err := audit.NewSubjectContext("subject:operator", "tenant:west")
-	if err != nil {
-		t.Fatalf("NewSubjectContext: %v", err)
-	}
-	root, err := scope.NewRootContext(context.Background(), subject)
+	security := testGovernedSecurityContext(t)
+	root, err := scope.NewRootContext(context.Background(), security)
 	if err != nil {
 		t.Fatalf("NewRootContext: %v", err)
 	}
@@ -35,18 +31,18 @@ func TestAuthorizationRequestCarriesOnlyGovernedFacts(t *testing.T) {
 		t.Fatalf("newAuthorizationRequest: %v", err)
 	}
 	current, _ := Current(entered)
-	if !request.Valid() || request.Caller() != scope.caller || request.Capability() != identifier {
+	if !request.Valid() || request.RuntimeCaller() != scope.caller || request.Capability() != identifier {
 		t.Fatalf("authorization request = %#v", request)
 	}
 	if request.RequestID() != current.RequestID() || request.TraceID() != current.TraceID() || request.InvocationID() != invocationID || request.ParentInvocationID().Valid() {
 		t.Fatalf("authorization identities = %#v", request)
 	}
-	if request.SubjectIdentity() != "subject:operator" || request.TenantIdentity() != "tenant:west" {
-		t.Fatalf("authorization subject = %#v", request)
+	if request.SecurityContext() != security || request.SecurityContext() != current.SecurityContext() {
+		t.Fatalf("authorization security context = %#v", request)
 	}
 
 	var zero AuthorizationRequest
-	if zero.Valid() || zero.Caller().Valid() || zero.Capability().String() != "" || zero.RequestID().Valid() || zero.TraceID().Valid() || zero.InvocationID().Valid() || zero.ParentInvocationID().Valid() || zero.SubjectIdentity() != "" || zero.TenantIdentity() != "" {
+	if zero.Valid() || zero.RuntimeCaller().Valid() || zero.Capability().String() != "" || zero.RequestID().Valid() || zero.TraceID().Valid() || zero.InvocationID().Valid() || zero.ParentInvocationID().Valid() || zero.SecurityContext().Valid() {
 		t.Fatalf("zero authorization request = %#v", zero)
 	}
 }
@@ -55,11 +51,8 @@ func TestAuthorizationRequestRejectsUngovernedInputs(t *testing.T) {
 	t.Parallel()
 
 	scope := testHandleScope(t)
-	subject, err := audit.NewSubjectContext("", "")
-	if err != nil {
-		t.Fatalf("NewSubjectContext: %v", err)
-	}
-	root, err := scope.NewRootContext(context.Background(), subject)
+	security := testAnonymousSecurityContext(t)
+	root, err := scope.NewRootContext(context.Background(), security)
 	if err != nil {
 		t.Fatalf("NewRootContext: %v", err)
 	}
@@ -186,11 +179,8 @@ func TestCapabilityAuthorizerFailsClosed(t *testing.T) {
 func testAuthorizationRequest(t *testing.T) (context.Context, AuthorizationRequest) {
 	t.Helper()
 	scope := testHandleScope(t)
-	subject, err := audit.NewSubjectContext("", "")
-	if err != nil {
-		t.Fatalf("NewSubjectContext: %v", err)
-	}
-	root, err := scope.NewRootContext(context.Background(), subject)
+	security := testAnonymousSecurityContext(t)
+	root, err := scope.NewRootContext(context.Background(), security)
 	if err != nil {
 		t.Fatalf("NewRootContext: %v", err)
 	}

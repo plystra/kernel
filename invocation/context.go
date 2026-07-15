@@ -16,14 +16,14 @@ var ErrInvalidInvocationContext = errors.New("invalid runtime invocation context
 
 type runtimeFrameKey struct{}
 
-// runtimeFrame is immutable Kernel-owned ancestry and subject state. The
+// runtimeFrame is immutable Kernel-owned ancestry and security state. The
 // ordinary Go context remains the value carrier but cannot fabricate this key.
 type runtimeFrame struct {
 	requestID    audit.RequestID
 	traceID      audit.TraceID
 	invocationID audit.InvocationID
 	parentID     audit.InvocationID
-	subject      audit.SubjectContext
+	security     audit.SecurityContext
 	deadline     time.Time
 	authority    context.Context
 }
@@ -34,14 +34,14 @@ type InvocationContext struct {
 	traceID      audit.TraceID
 	invocationID audit.InvocationID
 	parentID     audit.InvocationID
-	subject      audit.SubjectContext
+	security     audit.SecurityContext
 	deadline     time.Time
 }
 
 // NewRootContext mints one root request frame through a Kernel caller scope.
 // Plugin scopes cannot create roots, and an existing frame cannot be replaced.
-func (s Scope) NewRootContext(parent context.Context, subject audit.SubjectContext) (context.Context, error) {
-	if !s.valid() || s.caller.Kind() != audit.CallerKindKernel || parent == nil || !subject.Valid() {
+func (s Scope) NewRootContext(parent context.Context, security audit.SecurityContext) (context.Context, error) {
+	if !s.valid() || s.caller.Kind() != audit.CallerKindKernel || parent == nil || !security.Valid() {
 		return nil, ErrInvalidInvocationContext
 	}
 	if parent.Value(runtimeFrameKey{}) != nil {
@@ -59,7 +59,7 @@ func (s Scope) NewRootContext(parent context.Context, subject audit.SubjectConte
 	frame := runtimeFrame{
 		requestID: requestID,
 		traceID:   traceID,
-		subject:   subject,
+		security:  security,
 		deadline:  deadline,
 		authority: parent,
 	}
@@ -99,7 +99,7 @@ func Current(ctx context.Context) (InvocationContext, bool) {
 		traceID:      frame.traceID,
 		invocationID: frame.invocationID,
 		parentID:     frame.parentID,
-		subject:      frame.subject,
+		security:     frame.security,
 		deadline:     frame.deadline,
 	}, true
 }
@@ -117,11 +117,9 @@ func (c InvocationContext) InvocationID() audit.InvocationID { return c.invocati
 // first provider call in a request.
 func (c InvocationContext) ParentInvocationID() audit.InvocationID { return c.parentID }
 
-// SubjectIdentity returns the optional authenticated subject reference.
-func (c InvocationContext) SubjectIdentity() string { return c.subject.SubjectIdentity() }
-
-// TenantIdentity returns the optional tenant or authorization-space reference.
-func (c InvocationContext) TenantIdentity() string { return c.subject.TenantIdentity() }
+// SecurityContext returns the immutable provider-neutral Principal and
+// authentication or authorization references established at trusted ingress.
+func (c InvocationContext) SecurityContext() audit.SecurityContext { return c.security }
 
 // Deadline returns the effective governed invocation deadline.
 func (c InvocationContext) Deadline() time.Time { return c.deadline }
@@ -147,7 +145,7 @@ func enterInvocationContext(parent context.Context, invocationID audit.Invocatio
 		traceID:      frame.traceID,
 		invocationID: invocationID,
 		parentID:     frame.invocationID,
-		subject:      frame.subject,
+		security:     frame.security,
 		deadline:     deadline,
 		authority:    frame.authority,
 	}
@@ -188,7 +186,7 @@ func (f runtimeFrame) validInvocation() bool {
 }
 
 func (f runtimeFrame) valid() bool {
-	if !f.requestID.Valid() || !f.traceID.Valid() || !f.subject.Valid() || f.authority == nil {
+	if !f.requestID.Valid() || !f.traceID.Valid() || !f.security.Valid() || f.authority == nil {
 		return false
 	}
 	authorityDeadline, hasDeadline := f.authority.Deadline()
