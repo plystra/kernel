@@ -8,10 +8,11 @@ import (
 )
 
 type canonicalCapabilitySchema struct {
-	ID       string                          `json:"id"`
-	Request  map[string]canonicalSchemaField `json:"request"`
-	Response map[string]canonicalSchemaField `json:"response"`
-	Errors   []string                        `json:"errors"`
+	ID         string                          `json:"id"`
+	Request    map[string]canonicalSchemaField `json:"request"`
+	Response   map[string]canonicalSchemaField `json:"response"`
+	Errors     []string                        `json:"errors"`
+	Extensions map[string]json.RawMessage      `json:"extensions,omitempty"`
 }
 
 type canonicalSchemaField struct {
@@ -21,17 +22,18 @@ type canonicalSchemaField struct {
 	Enum     []json.RawMessage `json:"enum,omitempty"`
 }
 
-// CanonicalSchemaJSON returns the deterministic semantic wire schema. Human
-// descriptions and source formatting are intentionally excluded.
+// CanonicalSchemaJSON returns the deterministic semantic wire schema and
+// build-time metadata. Human descriptions and source formatting are excluded.
 func (c Capability) CanonicalSchemaJSON() ([]byte, error) {
 	if c.id.String() == "" {
 		return nil, invalidCapability("cannot normalize a capability without an ID")
 	}
 	canonical := canonicalCapabilitySchema{
-		ID:       c.id.String(),
-		Request:  canonicalizeSchema(c.request),
-		Response: canonicalizeSchema(c.response),
-		Errors:   append([]string(nil), c.errors...),
+		ID:         c.id.String(),
+		Request:    canonicalizeSchema(c.request),
+		Response:   canonicalizeSchema(c.response),
+		Errors:     append([]string(nil), c.errors...),
+		Extensions: canonicalizeCapabilityExtensions(c.extensions),
 	}
 	sort.Strings(canonical.Errors)
 	if canonical.Errors == nil {
@@ -42,6 +44,17 @@ func (c Capability) CanonicalSchemaJSON() ([]byte, error) {
 		return nil, invalidCapability("encode canonical schema: %v", err)
 	}
 	return encoded, nil
+}
+
+func canonicalizeCapabilityExtensions(extensions CapabilityExtensions) map[string]json.RawMessage {
+	if len(extensions.values) == 0 {
+		return nil
+	}
+	canonical := make(map[string]json.RawMessage, len(extensions.values))
+	for _, extension := range extensions.values {
+		canonical[extension.namespace] = json.RawMessage(extension.ValueJSON())
+	}
+	return canonical
 }
 
 // SchemaDigest returns the SHA-256 digest of CanonicalSchemaJSON.
