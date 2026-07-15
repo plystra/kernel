@@ -2,7 +2,7 @@
 
 `github.com/plystra/kernel` is the runtime half of Plystra Core. It exposes the stable Go APIs used by plugins and by source generated through the Plystra CLI.
 
-The module is intentionally independent from the CLI and from official plugin modules. Authentication and authorization implementations belong in `github.com/plystra/authn` and `github.com/plystra/authz`, not in the Kernel.
+The module is intentionally independent from the CLI and from official plugin modules. Authentication and authorization implementations belong in `github.com/plystra/authn` and `github.com/plystra/authz`, not in the Kernel. The Kernel owns no `User` model, account lifecycle, user persistence, user CRUD API, credentials, or user-specific attributes; applications without AuthN or a user system remain valid.
 
 Provider-independent capability identities are parsed by `capability.ParseIdentifier`. Exact major versions are mandatory and canonical, for example `email.send/v1`; callers never encode a provider or Go Module in that identity.
 
@@ -14,7 +14,7 @@ Typed capability declarations use `capability.Contract[Request, Response]`. Each
 
 An `invocation.Dispatcher` requires a positive default execution timeout and an explicit capability authorizer, then atomically publishes one complete copied catalog exactly once. Missing authorization policy fails construction rather than defaulting to allow. Before publication the Dispatcher is explicitly not ready; failed validation leaves it unpublished, concurrent publishers have one winner, and readers observe either no catalog or one complete immutable snapshot.
 
-Runtime caller provenance uses immutable `audit.CallerIdentity` values. Kernel-owned callers have no fabricated Plugin ID, while plugin callers carry one exact canonical Plugin ID. Module build data, authenticated service identity, user or tenant identity, and transport metadata remain separate governed invocation facts.
+Runtime caller provenance uses immutable `audit.CallerIdentity` values. Kernel-owned callers have no fabricated Plugin ID, while plugin callers carry one exact canonical Plugin ID. Module build data, the caller Principal or security subject, optional authorization-boundary references, and transport metadata remain separate governed invocation facts.
 
 `Dispatcher.Scope` binds one validated caller identity to exactly one Dispatcher without exposing an invocation surface. Scopes can be staged before catalog publication and remain opaque to plugin code, allowing generated assembly to create caller-bound typed handles only after their contracts and dependency resolutions are known.
 
@@ -26,7 +26,11 @@ Runtime audit uses distinct `audit.RequestID`, `audit.TraceID`, and `audit.Invoc
 
 `audit.ModuleBuild` carries bounded immutable provider provenance using a canonical Go module path plus a canonical matching module version, a safe generated or VCS build identity, or both. Development modules without a version must still provide a build identity. This embedded observability fact never replaces `go.mod`, `go.sum`, or Go's dependency resolution.
 
-`audit.SubjectContext` carries bounded opaque subject and tenant or authorization-space references without making authentication or authorization a Kernel business domain. Anonymous access is represented by an explicitly constructed empty context; the zero value remains invalid so a missing ingress decision cannot silently become anonymous.
+The Kernel security-context target is a minimal domain-neutral `Principal` reference, not a full User object. A Principal may identify an anonymous caller, User, service, plugin, system process, device, or another extensible principal kind using only an opaque subject identifier, kind, and issuer where applicable. AuthN resolves credentials and authentication identities to that reference, AuthZ consumes it for authorization, and the Kernel neither interprets nor queries the User behind it. `Principal` is a runtime security-context type, not a fifth top-level public concept.
+
+The current incremental API exposes the provider-neutral portion of that boundary as `audit.SubjectContext`, which carries bounded opaque subject and tenant or authorization-space references without defining a Kernel User domain. Anonymous access is represented by an explicitly constructed empty context; the zero value remains invalid so a missing ingress decision cannot silently become anonymous.
+
+Protected dispatch may use minimal trusted AuthN and AuthZ hooks to establish a Principal and make authorization decisions before ordinary capability entry. Those hooks must not recursively traverse the same protected dispatch path they govern. Login, logout, token refresh, account management, policy administration, and business-facing permission checks remain ordinary versioned capabilities. The Kernel owns only hook contracts, sequencing, security-context propagation, failure handling, auditing, and governance; AuthN and AuthZ own the corresponding domain behavior.
 
 `Scope.NewRootContext` lets only an explicit Kernel caller mint a root runtime frame with cryptographic request and trace IDs plus validated subject context. Existing or malformed frames, plugin callers, and missing inputs fail closed. The frame retains the original trusted deadline and cancellation authority even if ordinary Go cancellation is later detached.
 
