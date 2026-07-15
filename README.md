@@ -24,6 +24,8 @@ Capability failures use the closed `audit.ErrorCode` taxonomy and immutable `inv
 
 Runtime audit uses distinct `audit.RequestID`, `audit.TraceID`, and `audit.InvocationID` types backed by canonical non-zero 128-bit lower-case hexadecimal values. Root IDs are generated with cryptographic randomness, while external representations must pass the same strict parsers before entering runtime context.
 
+`audit.ModuleBuild` carries bounded immutable provider provenance using a canonical Go module path plus a canonical matching module version, a safe generated or VCS build identity, or both. Development modules without a version must still provide a build identity. This embedded observability fact never replaces `go.mod`, `go.sum`, or Go's dependency resolution.
+
 `audit.SubjectContext` carries bounded opaque subject and tenant or authorization-space references without making authentication or authorization a Kernel business domain. Anonymous access is represented by an explicitly constructed empty context; the zero value remains invalid so a missing ingress decision cannot silently become anonymous.
 
 `Scope.NewRootContext` lets only an explicit Kernel caller mint a root runtime frame with cryptographic request and trace IDs plus validated subject context. Existing or malformed frames, plugin callers, and missing inputs fail closed. The frame retains the original trusted deadline and cancellation authority even if ordinary Go cancellation is later detached.
