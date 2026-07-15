@@ -1,6 +1,7 @@
 package invocation
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -10,17 +11,20 @@ import (
 	"github.com/plystra/kernel/capability"
 )
 
-func TestNewDispatcherRequiresPositiveDefaultTimeout(t *testing.T) {
+func TestNewDispatcherRequiresGovernanceConfiguration(t *testing.T) {
 	t.Parallel()
 
 	for _, timeout := range []time.Duration{0, -time.Nanosecond, -time.Second} {
-		dispatcher, err := NewDispatcher(DispatcherOptions{DefaultTimeout: timeout})
+		dispatcher, err := NewDispatcher(DispatcherOptions{DefaultTimeout: timeout, Authorizer: testAuthorizationAllow})
 		if !errors.Is(err, ErrInvalidDispatcher) || dispatcher != nil {
 			t.Fatalf("NewDispatcher(%s) = %#v, %v", timeout, dispatcher, err)
 		}
 	}
-	dispatcher, err := NewDispatcher(DispatcherOptions{DefaultTimeout: 30 * time.Second})
-	if err != nil || !dispatcher.valid() || dispatcher.defaultTimeout != 30*time.Second || dispatcher.Published() {
+	if dispatcher, err := NewDispatcher(DispatcherOptions{DefaultTimeout: time.Second}); !errors.Is(err, ErrInvalidDispatcher) || dispatcher != nil {
+		t.Fatalf("NewDispatcher(nil authorizer) = %#v, %v", dispatcher, err)
+	}
+	dispatcher, err := NewDispatcher(DispatcherOptions{DefaultTimeout: 30 * time.Second, Authorizer: testAuthorizationAllow})
+	if err != nil || !dispatcher.valid() || dispatcher.defaultTimeout != 30*time.Second || dispatcher.authorizer == nil || dispatcher.Published() {
 		t.Fatalf("NewDispatcher(valid) = %#v, %v", dispatcher, err)
 	}
 }
@@ -194,11 +198,15 @@ func TestDispatcherSnapshotsAreSafeDuringPublicationAndAllocateNothing(t *testin
 
 func newTestDispatcher(t *testing.T) *Dispatcher {
 	t.Helper()
-	dispatcher, err := NewDispatcher(DispatcherOptions{DefaultTimeout: time.Second})
+	dispatcher, err := NewDispatcher(DispatcherOptions{DefaultTimeout: time.Second, Authorizer: testAuthorizationAllow})
 	if err != nil {
 		t.Fatalf("NewDispatcher: %v", err)
 	}
 	return dispatcher
+}
+
+func testAuthorizationAllow(context.Context, AuthorizationRequest) (AuthorizationDecision, error) {
+	return NewAllowedAuthorization(), nil
 }
 
 func testDispatcherCatalog(t *testing.T, value string) (Catalog, capability.Identifier) {

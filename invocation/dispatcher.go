@@ -21,22 +21,24 @@ var (
 // DispatcherOptions configures mandatory runtime dispatch behavior.
 type DispatcherOptions struct {
 	DefaultTimeout time.Duration
+	Authorizer     Authorizer
 }
 
 // Dispatcher owns one atomically published immutable executable catalog. A
 // Dispatcher must not be copied after first use.
 type Dispatcher struct {
 	defaultTimeout time.Duration
+	authorizer     Authorizer
 	catalog        atomic.Pointer[catalogState]
 }
 
-// NewDispatcher creates an unpublished Dispatcher with a positive default
-// execution timeout.
+// NewDispatcher creates an unpublished Dispatcher with mandatory authorization
+// and a positive default execution timeout.
 func NewDispatcher(options DispatcherOptions) (*Dispatcher, error) {
-	if options.DefaultTimeout <= 0 {
+	if options.DefaultTimeout <= 0 || options.Authorizer == nil {
 		return nil, ErrInvalidDispatcher
 	}
-	return &Dispatcher{defaultTimeout: options.DefaultTimeout}, nil
+	return &Dispatcher{defaultTimeout: options.DefaultTimeout, authorizer: options.Authorizer}, nil
 }
 
 // Publish atomically installs one complete catalog exactly once. The catalog
@@ -62,7 +64,7 @@ func (d *Dispatcher) Published() bool {
 }
 
 func (d *Dispatcher) valid() bool {
-	return d != nil && d.defaultTimeout > 0
+	return d != nil && d.defaultTimeout > 0 && d.authorizer != nil
 }
 
 func (d *Dispatcher) snapshot() (*catalogState, error) {

@@ -12,7 +12,7 @@ Typed capability declarations use `capability.Contract[Request, Response]`. Each
 
 `invocation.NewCatalog` accepts only validated, already-resolved endpoint bindings carrying their canonical schema digest and selected Kernel or Plugin provider identity. It performs no runtime provider selection, distinguishes exact capability versions, copies source state, and serves immutable lock-free lookups, including a valid empty catalog for zero-plugin applications.
 
-An `invocation.Dispatcher` requires a positive default execution timeout and atomically publishes one complete copied catalog exactly once. Before publication it is explicitly not ready; failed validation leaves it unpublished, concurrent publishers have one winner, and readers observe either no catalog or one complete immutable snapshot.
+An `invocation.Dispatcher` requires a positive default execution timeout and an explicit capability authorizer, then atomically publishes one complete copied catalog exactly once. Missing authorization policy fails construction rather than defaulting to allow. Before publication the Dispatcher is explicitly not ready; failed validation leaves it unpublished, concurrent publishers have one winner, and readers observe either no catalog or one complete immutable snapshot.
 
 Runtime caller provenance uses immutable `audit.CallerIdentity` values. Kernel-owned callers have no fabricated Plugin ID, while plugin callers carry one exact canonical Plugin ID. Module build data, authenticated service identity, user or tenant identity, and transport metadata remain separate governed invocation facts.
 
@@ -29,6 +29,8 @@ Runtime audit uses distinct `audit.RequestID`, `audit.TraceID`, and `audit.Invoc
 `Scope.NewRootContext` lets only an explicit Kernel caller mint a root runtime frame with cryptographic request and trace IDs plus validated subject context. Existing or malformed frames, plugin callers, and missing inputs fail closed. The frame retains the original trusted deadline and cancellation authority even if ordinary Go cancellation is later detached.
 
 Each governed provider entry derives an immutable child frame with a unique invocation ID and immediate parent ancestry. The effective deadline is the earliest configured, caller, or trusted-frame deadline, and trusted cancellation remains linked through detached Go contexts. Providers can inspect only the safe request, trace, ancestry, subject, tenant, and deadline snapshot through `invocation.Current`; root frames, cancellation authority, and mutable runtime state are not exposed.
+
+Capability authorization receives an immutable Kernel-owned request containing caller provenance, the provider-independent capability identity, safe subject and tenant references, and audit correlation IDs. Policies must return an explicit valid allow or stable-code denial; a missing policy, zero or malformed decision, callback error, or panic fails closed without retaining policy implementation details. Selected provider identity is deliberately outside the authorization request so provider replacement cannot change caller permission.
 
 Concrete implementation identities are parsed separately by `plugin.ParseID`, for example `acme.email.smtp`. A Plugin ID is never a capability identity and carries no independent version; the containing Go Module supplies distribution versioning.
 
