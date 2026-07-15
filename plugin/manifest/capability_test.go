@@ -87,14 +87,68 @@ func TestParseCapability(t *testing.T) {
 	}
 }
 
-func TestParseCapabilityAllowsEmptySchemas(t *testing.T) {
+func TestParseCapabilityExtensions(t *testing.T) {
 	t.Parallel()
 
-	contract, err := manifest.ParseCapability([]byte("id: kernel.health/v1\nrequest: {}\nresponse: {}\nerrors: []\n"))
+	contract, err := manifest.ParseCapability([]byte(`id: order.cancel/v1
+extensions:
+  rate-limit: 5
+  telemetry: [null, true, 1, 1.5, sample]
+  authz:
+    resource:
+      required: true
+      kind: order
+    permission: order.cancel
+  authn:
+    methods: [password, passkey]
+    authenticated: true
+`))
 	if err != nil {
 		t.Fatalf("ParseCapability: %v", err)
 	}
-	if contract.ID().String() != "kernel.health/v1" || len(contract.Request().Fields()) != 0 || len(contract.Response().Fields()) != 0 || len(contract.Errors()) != 0 {
+
+	values := contract.Extensions().Values()
+	if len(values) != 4 {
+		t.Fatalf("Extensions().Values() = %#v", values)
+	}
+	want := []struct {
+		namespace string
+		value     string
+	}{
+		{namespace: "authn", value: `{"authenticated":true,"methods":["password","passkey"]}`},
+		{namespace: "authz", value: `{"permission":"order.cancel","resource":{"kind":"order","required":true}}`},
+		{namespace: "rate-limit", value: `5`},
+		{namespace: "telemetry", value: `[null,true,1,1.5,"sample"]`},
+	}
+	for index, expected := range want {
+		if values[index].Namespace() != expected.namespace || string(values[index].ValueJSON()) != expected.value {
+			t.Fatalf("extension[%d] = %q %s, want %q %s", index, values[index].Namespace(), values[index].ValueJSON(), expected.namespace, expected.value)
+		}
+		lookup, ok := contract.Extensions().Lookup(expected.namespace)
+		if !ok || lookup.Namespace() != expected.namespace || string(lookup.ValueJSON()) != expected.value {
+			t.Fatalf("Extensions().Lookup(%q) = %#v, %t", expected.namespace, lookup, ok)
+		}
+	}
+	if _, ok := contract.Extensions().Lookup("missing"); ok {
+		t.Fatal("Extensions().Lookup(missing) succeeded")
+	}
+
+	values[0] = manifest.CapabilityExtension{}
+	encoded := contract.Extensions().Values()[0].ValueJSON()
+	encoded[0] = 'x'
+	if got := contract.Extensions().Values()[0]; got.Namespace() != "authn" || string(got.ValueJSON()) != want[0].value {
+		t.Fatal("Capability extension accessors exposed mutable storage")
+	}
+}
+
+func TestParseCapabilityAllowsEmptySchemas(t *testing.T) {
+	t.Parallel()
+
+	contract, err := manifest.ParseCapability([]byte("id: kernel.health/v1\nrequest: {}\nresponse: {}\nerrors: []\nextensions: {}\n"))
+	if err != nil {
+		t.Fatalf("ParseCapability: %v", err)
+	}
+	if contract.ID().String() != "kernel.health/v1" || len(contract.Request().Fields()) != 0 || len(contract.Response().Fields()) != 0 || len(contract.Errors()) != 0 || len(contract.Extensions().Values()) != 0 {
 		t.Fatalf("empty capability = %#v", contract)
 	}
 }
@@ -146,6 +200,21 @@ func TestParseCapabilityRejectsInvalidDeclarations(t *testing.T) {
 		{name: "non string id", input: "id: 1\n"},
 		{name: "invalid id", input: "id: email.send\n"},
 		{name: "non string description", input: "id: email.send/v1\ndescription: 1\n"},
+		{name: "extensions not mapping", input: "id: email.send/v1\nextensions: []\n"},
+		{name: "non string extension namespace", input: "id: email.send/v1\nextensions:\n  1: true\n"},
+		{name: "empty extension namespace", input: "id: email.send/v1\nextensions:\n  '': {}\n"},
+		{name: "oversized extension namespace", input: "id: email.send/v1\nextensions:\n  " + strings.Repeat("a", 129) + ": {}\n"},
+		{name: "upper case extension namespace", input: "id: email.send/v1\nextensions:\n  AuthN: {}\n"},
+		{name: "dotted extension namespace", input: "id: email.send/v1\nextensions:\n  acme.authn: {}\n"},
+		{name: "leading digit extension namespace", input: "id: email.send/v1\nextensions:\n  1authn: {}\n"},
+		{name: "consecutive hyphen extension namespace", input: "id: email.send/v1\nextensions:\n  auth--n: {}\n"},
+		{name: "trailing hyphen extension namespace", input: "id: email.send/v1\nextensions:\n  authn-: {}\n"},
+		{name: "duplicate extension namespace", input: "id: email.send/v1\nextensions:\n  authn: {}\n  authn: {}\n"},
+		{name: "duplicate extension object key", input: "id: email.send/v1\nextensions:\n  authn: {authenticated: true, authenticated: false}\n"},
+		{name: "noncanonical extension integer", input: "id: email.send/v1\nextensions:\n  rate-limit: 01\n"},
+		{name: "nonfinite extension number", input: "id: email.send/v1\nextensions:\n  rate-limit: .nan\n"},
+		{name: "unsupported extension scalar", input: "id: email.send/v1\nextensions:\n  audit: 2026-07-15\n"},
+		{name: "extension value too deep", input: "id: email.send/v1\nextensions:\n  audit: " + strings.Repeat("[", 65) + "true" + strings.Repeat("]", 65) + "\n"},
 		{name: "request not mapping", input: "id: email.send/v1\nrequest: []\n"},
 		{name: "response not mapping", input: "id: email.send/v1\nresponse: []\n"},
 		{name: "invalid field name", input: "id: email.send/v1\nrequest:\n  BadName: {type: string}\n"},
@@ -181,7 +250,7 @@ func TestParseCapabilityRejectsInvalidDeclarations(t *testing.T) {
 			if !errors.Is(err, manifest.ErrInvalidCapability) {
 				t.Fatalf("ParseCapability error = %v, want ErrInvalidCapability", err)
 			}
-			if contract.ID().String() != "" || len(contract.Request().Fields()) != 0 || len(contract.Response().Fields()) != 0 || len(contract.Errors()) != 0 {
+			if contract.ID().String() != "" || len(contract.Request().Fields()) != 0 || len(contract.Response().Fields()) != 0 || len(contract.Errors()) != 0 || len(contract.Extensions().Values()) != 0 {
 				t.Fatalf("invalid declaration returned data: %#v", contract)
 			}
 		})
@@ -219,7 +288,7 @@ func TestParseCapabilityRejectsOversizedDocument(t *testing.T) {
 }
 
 func FuzzParseCapability(f *testing.F) {
-	for _, seed := range []string{"id: kernel.health/v1\n", validCapability, "[]\n", "id: &x email.send/v1\ndescription: *x\n"} {
+	for _, seed := range []string{"id: kernel.health/v1\n", validCapability, "id: order.cancel/v1\nextensions:\n  authn: {authenticated: true}\n", "[]\n", "id: &x email.send/v1\ndescription: *x\n"} {
 		f.Add(seed)
 	}
 	f.Fuzz(func(t *testing.T, input string) {
@@ -246,6 +315,15 @@ func FuzzParseCapability(f *testing.F) {
 		for index := 1; index < len(contract.Errors()); index++ {
 			if contract.Errors()[index-1] >= contract.Errors()[index] {
 				t.Fatalf("errors are not uniquely sorted: %q then %q", contract.Errors()[index-1], contract.Errors()[index])
+			}
+		}
+		extensions := contract.Extensions().Values()
+		for index, extension := range extensions {
+			if !json.Valid(extension.ValueJSON()) {
+				t.Fatalf("extension %q is not canonical JSON: %q", extension.Namespace(), extension.ValueJSON())
+			}
+			if index > 0 && extensions[index-1].Namespace() >= extension.Namespace() {
+				t.Fatalf("extensions are not uniquely sorted: %q then %q", extensions[index-1].Namespace(), extension.Namespace())
 			}
 		}
 	})

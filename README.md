@@ -78,7 +78,7 @@ CLI-generated application invocation audit and explicit business audit events ar
 
 Provider-independent identities use the exact form `<capability-name>/v<number>`, such as `email.send/v1` or `authn.login.oidc.complete/v1`. A capability name has at least two dot-separated segments; each starts with a lower-case letter and continues with lower-case letters, digits, or hyphens. Segment count expresses logical hierarchy and never implies a fixed namespace/operation split. Callers never encode a Plugin ID or Go Module in a Capability identity.
 
-Capability contracts, semantic errors, canonical schema digests, official catalog definitions, Plugin IDs, strict plugin manifests, and typed configuration declarations use stable Kernel packages consumed by plugins and the CLI. Exact official versions are immutable; providers of the same identity must use semantically identical schemas.
+Capability contracts, semantic errors, canonical schema digests, official catalog definitions, Plugin IDs, strict plugin manifests, and typed configuration declarations use stable Kernel packages consumed by plugins and the CLI. Capability declarations may carry lower-kebab namespaced JSON-compatible build-time metadata. The Kernel parses and preserves that metadata as immutable, canonically ordered contract data without interpreting namespace semantics. Exact official versions are immutable, and providers of the same identity must use semantically identical contracts.
 
 There is no separately distributed Go Plugin SDK. Plugins and generated source depend directly on the stable Kernel API.
 
