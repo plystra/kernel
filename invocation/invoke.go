@@ -14,7 +14,6 @@ const (
 	detailDispatcherNotReady      = "runtime.dispatcher_not_ready"
 	detailCapabilityUnavailable   = "runtime.capability_unavailable"
 	detailInvocationIDFailed      = "runtime.invocation_id_failed"
-	detailAuthorizationFailed     = "authorization.evaluation_failed"
 	detailDeadlineExceeded        = "runtime.deadline_exceeded"
 	detailInvocationCancelled     = "runtime.cancelled"
 	detailProviderPanic           = "provider.panic_recovered"
@@ -26,9 +25,9 @@ const (
 	detailErrorNormalization      = "runtime.error_normalization_failed"
 )
 
-// Invoke executes one exact capability through the Kernel's mandatory
-// governance boundary. Every entered invocation is authorized, deadline-bound,
-// normalized to safe errors, and terminally audited before a result is exposed.
+// Invoke executes one exact canonical capability through raw Kernel dispatch.
+// Every entered invocation is deadline-bound, normalized to safe errors, and
+// terminally audited before a result is exposed.
 func (h Handle[Request, Response]) Invoke(ctx context.Context, request Request) (Response, error) {
 	var zero Response
 	if !h.valid() {
@@ -61,7 +60,7 @@ func (h Handle[Request, Response]) Invoke(ctx context.Context, request Request) 
 	defer cleanup()
 
 	startedInstant := time.Now()
-	response, boundary, executionBegan := invokeGoverned(callContext, h, binding, request)
+	response, boundary, executionBegan := invokeBounded(callContext, h, binding, request)
 	completedInstant := time.Now()
 	record, err := newInvocationAuditRecord(h, binding, callContext, startedInstant, completedInstant, boundary)
 	if err != nil {
@@ -79,7 +78,7 @@ func (h Handle[Request, Response]) Invoke(ctx context.Context, request Request) 
 	return response, nil
 }
 
-func invokeGoverned[Request, Response any](
+func invokeBounded[Request, Response any](
 	ctx context.Context,
 	handle Handle[Request, Response],
 	binding Binding,
@@ -88,20 +87,6 @@ func invokeGoverned[Request, Response any](
 	var zero Response
 	if boundary := invocationContextError(ctx); boundary != nil {
 		return zero, boundary, false
-	}
-	authorizationRequest, err := newAuthorizationRequest(ctx, handle.scope, handle.definition.Identifier())
-	if err != nil {
-		return zero, newInvocationBoundary(audit.ErrorInternal, detailAuthorizationFailed), false
-	}
-	decision, err := authorizeCapability(ctx, handle.scope.dispatcher.authorizer, authorizationRequest)
-	if boundary := invocationContextError(ctx); boundary != nil {
-		return zero, boundary, false
-	}
-	if err != nil {
-		return zero, newInvocationBoundary(audit.ErrorInternal, detailAuthorizationFailed), false
-	}
-	if !decision.Allowed() {
-		return zero, newInvocationBoundary(audit.ErrorDenied, decision.DenialCode()), false
 	}
 	if binding.endpoint.definition != handle.definition {
 		return zero, newInvocationBoundary(audit.ErrorInternal, detailContractMismatch), false

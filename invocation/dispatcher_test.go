@@ -12,24 +12,21 @@ import (
 	"github.com/plystra/kernel/capability"
 )
 
-func TestNewDispatcherRequiresGovernanceConfiguration(t *testing.T) {
+func TestNewDispatcherRequiresRuntimeConfiguration(t *testing.T) {
 	t.Parallel()
 
 	recorder := newTestInvocationRecorder(t)
 	for _, timeout := range []time.Duration{0, -time.Nanosecond, -time.Second} {
-		dispatcher, err := NewDispatcher(DispatcherOptions{DefaultTimeout: timeout, Authorizer: testAuthorizationAllow, AuditRecorder: recorder})
+		dispatcher, err := NewDispatcher(DispatcherOptions{DefaultTimeout: timeout, AuditRecorder: recorder})
 		if !errors.Is(err, ErrInvalidDispatcher) || dispatcher != nil {
 			t.Fatalf("NewDispatcher(%s) = %#v, %v", timeout, dispatcher, err)
 		}
 	}
-	if dispatcher, err := NewDispatcher(DispatcherOptions{DefaultTimeout: time.Second, AuditRecorder: recorder}); !errors.Is(err, ErrInvalidDispatcher) || dispatcher != nil {
-		t.Fatalf("NewDispatcher(nil authorizer) = %#v, %v", dispatcher, err)
-	}
-	if dispatcher, err := NewDispatcher(DispatcherOptions{DefaultTimeout: time.Second, Authorizer: testAuthorizationAllow}); !errors.Is(err, ErrInvalidDispatcher) || dispatcher != nil {
+	if dispatcher, err := NewDispatcher(DispatcherOptions{DefaultTimeout: time.Second}); !errors.Is(err, ErrInvalidDispatcher) || dispatcher != nil {
 		t.Fatalf("NewDispatcher(nil audit recorder) = %#v, %v", dispatcher, err)
 	}
-	dispatcher, err := NewDispatcher(DispatcherOptions{DefaultTimeout: 30 * time.Second, Authorizer: testAuthorizationAllow, AuditRecorder: recorder})
-	if err != nil || !dispatcher.valid() || dispatcher.defaultTimeout != 30*time.Second || dispatcher.authorizer == nil || dispatcher.auditRecorder != recorder || dispatcher.Published() {
+	dispatcher, err := NewDispatcher(DispatcherOptions{DefaultTimeout: 30 * time.Second, AuditRecorder: recorder})
+	if err != nil || !dispatcher.valid() || dispatcher.defaultTimeout != 30*time.Second || dispatcher.auditRecorder != recorder || dispatcher.Published() {
 		t.Fatalf("NewDispatcher(valid) = %#v, %v", dispatcher, err)
 	}
 }
@@ -205,7 +202,6 @@ func newTestDispatcher(t *testing.T) *Dispatcher {
 	t.Helper()
 	dispatcher, err := NewDispatcher(DispatcherOptions{
 		DefaultTimeout: time.Second,
-		Authorizer:     testAuthorizationAllow,
 		AuditRecorder:  newTestInvocationRecorder(t),
 	})
 	if err != nil {
@@ -230,10 +226,6 @@ func (testInvocationAuditSink) PersistInvocation(context.Context, audit.Invocati
 }
 
 func (testInvocationAuditSink) Flush(context.Context) error { return nil }
-
-func testAuthorizationAllow(context.Context, AuthorizationRequest) (AuthorizationDecision, error) {
-	return NewAllowedAuthorization(), nil
-}
 
 func testDispatcherCatalog(t *testing.T, value string) (Catalog, capability.Identifier) {
 	t.Helper()

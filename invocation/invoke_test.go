@@ -24,13 +24,12 @@ type invokeResponse struct {
 	Value string
 }
 
-func TestHandleInvokeRunsCompleteGovernedPath(t *testing.T) {
+func TestHandleInvokeRunsCompleteRawDispatchPath(t *testing.T) {
 	t.Parallel()
 
 	contract := capability.MustParseContract[invokeRequest, invokeResponse]("example.invoke/v1")
 	security := testGovernedSecurityContext(t)
 	sink := &invokeCaptureSink{}
-	var authorization AuthorizationRequest
 	var providerContext InvocationContext
 	harness := newInvokeHarness(t, contract, func(ctx context.Context, request invokeRequest) (invokeResponse, error) {
 		current, exists := Current(ctx)
@@ -43,14 +42,7 @@ func TestHandleInvokeRunsCompleteGovernedPath(t *testing.T) {
 		}
 		providerContext = current
 		return invokeResponse{Value: "handled:" + request.Value}, nil
-	}, invokeHarnessOptions{
-		authorizer: func(_ context.Context, request AuthorizationRequest) (AuthorizationDecision, error) {
-			authorization = request
-			return NewAllowedAuthorization(), nil
-		},
-		sink:     sink,
-		security: security,
-	})
+	}, invokeHarnessOptions{sink: sink, security: security})
 
 	response, err := harness.handle.Invoke(harness.root, invokeRequest{Value: "request"})
 	if err != nil || response.Value != "handled:request" {
@@ -63,11 +55,6 @@ func TestHandleInvokeRunsCompleteGovernedPath(t *testing.T) {
 	record := records[0]
 	rootRequestID, _ := RequestID(harness.root)
 	rootTraceID, _ := TraceID(harness.root)
-	if !authorization.Valid() || authorization.RuntimeCaller() != harness.handle.scope.caller || authorization.Capability() != contract.Identifier() ||
-		authorization.RequestID() != rootRequestID || authorization.TraceID() != rootTraceID || authorization.InvocationID() != providerContext.InvocationID() ||
-		authorization.SecurityContext() != security {
-		t.Fatalf("authorization request = %#v", authorization)
-	}
 	if !record.Valid() || record.RuntimeCaller() != harness.handle.scope.caller || record.Capability() != contract.Identifier() ||
 		record.CapabilitySchemaDigest() != harness.binding.SchemaDigest() || record.ProviderKind() != audit.ProviderKindPlugin ||
 		record.ProviderPluginID() != harness.binding.ProviderID() || record.ProviderBuild() != harness.binding.ProviderBuild() ||
@@ -98,7 +85,7 @@ func TestHandleInvokeAuditsKernelProviderWithoutFabricatedPluginID(t *testing.T)
 		t.Fatalf("NewBinding: %v", err)
 	}
 	sink := &invokeCaptureSink{}
-	dispatcher := newInvokeDispatcher(t, testAuthorizationAllow, sink, time.Second)
+	dispatcher := newInvokeDispatcher(t, sink, time.Second)
 	catalog, err := NewCatalog([]Binding{binding})
 	if err != nil {
 		t.Fatalf("NewCatalog: %v", err)
@@ -128,14 +115,9 @@ func TestHandleInvokePropagatesNestedAncestryAndSecurity(t *testing.T) {
 	security := testGovernedSecurityContext(t)
 	sink := &invokeCaptureSink{}
 	recorder := mustInvocationRecorder(t, sink)
-	var authorizations atomic.Int32
 	dispatcher, err := NewDispatcher(DispatcherOptions{
 		DefaultTimeout: time.Second,
-		Authorizer: func(context.Context, AuthorizationRequest) (AuthorizationDecision, error) {
-			authorizations.Add(1)
-			return NewAllowedAuthorization(), nil
-		},
-		AuditRecorder: recorder,
+		AuditRecorder:  recorder,
 	})
 	if err != nil {
 		t.Fatalf("NewDispatcher: %v", err)
@@ -190,8 +172,8 @@ func TestHandleInvokePropagatesNestedAncestryAndSecurity(t *testing.T) {
 	}
 
 	records := sink.Records()
-	if len(records) != 2 || authorizations.Load() != 2 {
-		t.Fatalf("records/authorizations = %d/%d", len(records), authorizations.Load())
+	if len(records) != 2 {
+		t.Fatalf("records = %d, want 2", len(records))
 	}
 	byCapability := make(map[string]audit.InvocationRecord, len(records))
 	for _, record := range records {
@@ -217,7 +199,7 @@ func TestHandleInvokeRejectsNestedCallThatDropsGovernedContext(t *testing.T) {
 	outerProviderID := mustPluginID(t, "acme.context.outer")
 	innerProviderID := mustPluginID(t, "acme.context.inner")
 	sink := &invokeCaptureSink{}
-	dispatcher := newInvokeDispatcher(t, testAuthorizationAllow, sink, time.Second)
+	dispatcher := newInvokeDispatcher(t, sink, time.Second)
 	outerProviderCaller, err := audit.NewPluginCallerIdentity(outerProviderID)
 	if err != nil {
 		t.Fatalf("NewPluginCallerIdentity: %v", err)
@@ -297,78 +279,6 @@ func TestHandleInvokeIsSafeForConcurrentRootCalls(t *testing.T) {
 	}
 }
 
-func TestHandleInvokeDenialIsAuditedWithoutProviderExecution(t *testing.T) {
-	t.Parallel()
-
-	contract := capability.MustParseContract[invokeRequest, invokeResponse]("example.denied/v1")
-	sink := &invokeCaptureSink{}
-	denied, err := NewDeniedAuthorization("authorization.policy_denied")
-	if err != nil {
-		t.Fatalf("NewDeniedAuthorization: %v", err)
-	}
-	var providerCalls atomic.Int32
-	harness := newInvokeHarness(t, contract, func(context.Context, invokeRequest) (invokeResponse, error) {
-		providerCalls.Add(1)
-		return invokeResponse{Value: "must not escape"}, nil
-	}, invokeHarnessOptions{
-		authorizer: func(context.Context, AuthorizationRequest) (AuthorizationDecision, error) { return denied, nil },
-		sink:       sink,
-	})
-
-	response, err := harness.handle.Invoke(harness.root, invokeRequest{})
-	boundary := requireInvocationError(t, err, audit.ErrorDenied, "authorization.policy_denied")
-	if response != (invokeResponse{}) || providerCalls.Load() != 0 || !boundary.valid() {
-		t.Fatalf("denied Invoke = %#v, %v, provider calls %d", response, err, providerCalls.Load())
-	}
-	records := sink.Records()
-	if len(records) != 1 || records[0].Outcome().Status() != audit.OutcomeDenied ||
-		records[0].Outcome().ErrorCode() != audit.ErrorDenied || records[0].Outcome().DetailCode() != "authorization.policy_denied" {
-		t.Fatalf("denial records = %#v", records)
-	}
-}
-
-func TestHandleInvokeAuthorizationFailuresFailClosedAndAreAudited(t *testing.T) {
-	t.Parallel()
-
-	for _, test := range []struct {
-		name       string
-		authorizer Authorizer
-	}{
-		{name: "error", authorizer: func(context.Context, AuthorizationRequest) (AuthorizationDecision, error) {
-			return AuthorizationDecision{}, errors.New("policy database password=secret")
-		}},
-		{name: "panic", authorizer: func(context.Context, AuthorizationRequest) (AuthorizationDecision, error) {
-			panic("policy token=secret")
-		}},
-		{name: "invalid decision", authorizer: func(context.Context, AuthorizationRequest) (AuthorizationDecision, error) {
-			return AuthorizationDecision{}, nil
-		}},
-	} {
-		test := test
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			contract := capability.MustParseContract[invokeRequest, invokeResponse]("example.authorization-failure/v1")
-			sink := &invokeCaptureSink{}
-			var providerCalls atomic.Int32
-			harness := newInvokeHarness(t, contract, func(context.Context, invokeRequest) (invokeResponse, error) {
-				providerCalls.Add(1)
-				return invokeResponse{}, nil
-			}, invokeHarnessOptions{authorizer: test.authorizer, sink: sink})
-
-			response, err := harness.handle.Invoke(harness.root, invokeRequest{})
-			requireInvocationError(t, err, audit.ErrorInternal, detailAuthorizationFailed)
-			if response != (invokeResponse{}) || providerCalls.Load() != 0 || strings.Contains(err.Error(), "secret") {
-				t.Fatalf("authorization failure = %#v, %v, provider calls %d", response, err, providerCalls.Load())
-			}
-			records := sink.Records()
-			if len(records) != 1 || records[0].Outcome().Status() != audit.OutcomeFailed ||
-				records[0].Outcome().ErrorCode() != audit.ErrorInternal || records[0].Outcome().DetailCode() != detailAuthorizationFailed {
-				t.Fatalf("authorization failure records = %#v", records)
-			}
-		})
-	}
-}
-
 func TestHandleInvokeNormalizesProviderFailuresAndPanics(t *testing.T) {
 	t.Parallel()
 
@@ -436,46 +346,26 @@ func TestHandleInvokeNormalizesProviderFailuresAndPanics(t *testing.T) {
 	}
 }
 
-func TestHandleInvokeAppliesDeadlineAcrossAuthorizationAndProvider(t *testing.T) {
+func TestHandleInvokeAppliesDeadlineToProvider(t *testing.T) {
 	t.Parallel()
 
-	for _, stage := range []string{"authorization", "provider"} {
-		stage := stage
-		t.Run(stage, func(t *testing.T) {
-			t.Parallel()
-			contract := capability.MustParseContract[invokeRequest, invokeResponse]("example.deadline/v1")
-			sink := &invokeCaptureSink{}
-			var providerCalls atomic.Int32
-			authorizer := testAuthorizationAllow
-			if stage == "authorization" {
-				authorizer = func(ctx context.Context, _ AuthorizationRequest) (AuthorizationDecision, error) {
-					<-ctx.Done()
-					return NewAllowedAuthorization(), nil
-				}
-			}
-			harness := newInvokeHarness(t, contract, func(ctx context.Context, _ invokeRequest) (invokeResponse, error) {
-				providerCalls.Add(1)
-				<-ctx.Done()
-				return invokeResponse{Value: "late success"}, nil
-			}, invokeHarnessOptions{authorizer: authorizer, sink: sink, defaultTimeout: 15 * time.Millisecond})
+	contract := capability.MustParseContract[invokeRequest, invokeResponse]("example.deadline/v1")
+	sink := &invokeCaptureSink{}
+	var providerCalls atomic.Int32
+	harness := newInvokeHarness(t, contract, func(ctx context.Context, _ invokeRequest) (invokeResponse, error) {
+		providerCalls.Add(1)
+		<-ctx.Done()
+		return invokeResponse{Value: "late success"}, nil
+	}, invokeHarnessOptions{sink: sink, defaultTimeout: 15 * time.Millisecond})
 
-			response, err := harness.handle.Invoke(harness.root, invokeRequest{})
-			requireInvocationError(t, err, audit.ErrorTimeout, detailDeadlineExceeded)
-			if !errors.Is(err, context.DeadlineExceeded) || response != (invokeResponse{}) {
-				t.Fatalf("deadline Invoke = %#v, %v", response, err)
-			}
-			wantProviderCalls := int32(1)
-			if stage == "authorization" {
-				wantProviderCalls = 0
-			}
-			if providerCalls.Load() != wantProviderCalls {
-				t.Fatalf("provider calls = %d, want %d", providerCalls.Load(), wantProviderCalls)
-			}
-			records := sink.Records()
-			if len(records) != 1 || records[0].Outcome().Status() != audit.OutcomeTimedOut || records[0].Duration() < 10*time.Millisecond {
-				t.Fatalf("deadline records = %#v", records)
-			}
-		})
+	response, err := harness.handle.Invoke(harness.root, invokeRequest{})
+	requireInvocationError(t, err, audit.ErrorTimeout, detailDeadlineExceeded)
+	if !errors.Is(err, context.DeadlineExceeded) || response != (invokeResponse{}) || providerCalls.Load() != 1 {
+		t.Fatalf("deadline Invoke = %#v, %v, provider calls %d", response, err, providerCalls.Load())
+	}
+	records := sink.Records()
+	if len(records) != 1 || records[0].Outcome().Status() != audit.OutcomeTimedOut || records[0].Duration() < 10*time.Millisecond {
+		t.Fatalf("deadline records = %#v", records)
 	}
 }
 
@@ -623,37 +513,6 @@ func TestHandleInvokeFailsClosedWhenAuditDeliveryFails(t *testing.T) {
 	}
 }
 
-func TestHandleInvokeReportsUnavailableWhenPreExecutionAuditDeliveryFails(t *testing.T) {
-	t.Parallel()
-
-	contract := capability.MustParseContract[invokeRequest, invokeResponse]("example.audit-denial-failure/v1")
-	sink := &rejectingInvokeSink{}
-	denied, err := NewDeniedAuthorization("authorization.policy_denied")
-	if err != nil {
-		t.Fatalf("NewDeniedAuthorization: %v", err)
-	}
-	var providerCalls atomic.Int32
-	harness := newInvokeHarness(t, contract, func(context.Context, invokeRequest) (invokeResponse, error) {
-		providerCalls.Add(1)
-		return invokeResponse{}, nil
-	}, invokeHarnessOptions{
-		sink: sink,
-		authorizer: func(context.Context, AuthorizationRequest) (AuthorizationDecision, error) {
-			return denied, nil
-		},
-	})
-
-	response, err := harness.handle.Invoke(harness.root, invokeRequest{})
-	requireInvocationError(t, err, audit.ErrorUnavailable, detailAuditRecordingFailed)
-	if response != (invokeResponse{}) || providerCalls.Load() != 0 {
-		t.Fatalf("pre-execution audit failure = %#v, %v, provider calls %d", response, err, providerCalls.Load())
-	}
-	attempts := sink.Attempts()
-	if len(attempts) != 1 || attempts[0].Outcome().Status() != audit.OutcomeDenied {
-		t.Fatalf("pre-execution audit attempts = %#v", attempts)
-	}
-}
-
 func TestHandleInvokeRejectsPreEntryFailuresWithoutProviderOrAudit(t *testing.T) {
 	t.Parallel()
 
@@ -681,13 +540,13 @@ func TestHandleInvokeRejectsPreEntryFailuresWithoutProviderOrAudit(t *testing.T)
 	requireInvocationError(t, err, audit.ErrorUnavailable, detailCapabilityUnavailable)
 
 	unpublishedSink := &invokeCaptureSink{}
-	unpublished := newInvokeDispatcher(t, testAuthorizationAllow, unpublishedSink, time.Second)
+	unpublished := newInvokeDispatcher(t, unpublishedSink, time.Second)
 	unpublishedHandle, unpublishedRoot := newInvokeHandleAndRoot(t, unpublished, contract, testAnonymousSecurityContext(t))
 	_, err = unpublishedHandle.Invoke(unpublishedRoot, invokeRequest{})
 	requireInvocationError(t, err, audit.ErrorUnavailable, detailDispatcherNotReady)
 
 	emptySink := &invokeCaptureSink{}
-	empty := newInvokeDispatcher(t, testAuthorizationAllow, emptySink, time.Second)
+	empty := newInvokeDispatcher(t, emptySink, time.Second)
 	emptyCatalog, err := NewCatalog(nil)
 	if err != nil {
 		t.Fatalf("NewCatalog(nil): %v", err)
@@ -705,29 +564,7 @@ func TestHandleInvokeRejectsPreEntryFailuresWithoutProviderOrAudit(t *testing.T)
 }
 
 func BenchmarkCapabilityInvoke(b *testing.B) {
-	handle, root, _ := benchmarkInvokeRuntime(b, testAuthorizationAllow, benchmarkNoopInvocationSink{})
-	request := invokeRequest{Value: "request"}
-	var response invokeResponse
-	b.ReportAllocs()
-	b.ResetTimer()
-	for b.Loop() {
-		var err error
-		response, err = handle.Invoke(root, request)
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-	benchmarkInvokeResponse = response
-}
-
-func BenchmarkCapabilityInvokeWithMiddleware(b *testing.B) {
-	authorizer := func(_ context.Context, request AuthorizationRequest) (AuthorizationDecision, error) {
-		if !request.Valid() || !request.SecurityContext().CallerPrincipal().Valid() {
-			return AuthorizationDecision{}, errors.New("invalid benchmark request")
-		}
-		return NewAllowedAuthorization(), nil
-	}
-	handle, root, _ := benchmarkInvokeRuntime(b, authorizer, benchmarkNoopInvocationSink{})
+	handle, root, _ := benchmarkInvokeRuntime(b, benchmarkNoopInvocationSink{})
 	request := invokeRequest{Value: "request"}
 	var response invokeResponse
 	b.ReportAllocs()
@@ -744,7 +581,7 @@ func BenchmarkCapabilityInvokeWithMiddleware(b *testing.B) {
 
 func BenchmarkCapabilityInvokeWithAudit(b *testing.B) {
 	sink := &benchmarkCountingInvocationSink{}
-	handle, root, _ := benchmarkInvokeRuntime(b, testAuthorizationAllow, sink)
+	handle, root, _ := benchmarkInvokeRuntime(b, sink)
 	request := invokeRequest{Value: "request"}
 	var response invokeResponse
 	b.ReportAllocs()
@@ -761,7 +598,6 @@ func BenchmarkCapabilityInvokeWithAudit(b *testing.B) {
 }
 
 type invokeHarnessOptions struct {
-	authorizer     Authorizer
 	sink           audit.InvocationSink
 	security       audit.SecurityContext
 	parent         context.Context
@@ -782,9 +618,6 @@ func newInvokeHarness(
 	options invokeHarnessOptions,
 ) invokeHarness {
 	t.Helper()
-	if options.authorizer == nil {
-		options.authorizer = testAuthorizationAllow
-	}
 	if options.sink == nil {
 		t.Fatal("newInvokeHarness requires an audit sink")
 	}
@@ -799,7 +632,7 @@ func newInvokeHarness(
 	}
 	providerID := mustPluginID(t, "acme.invoke.provider")
 	binding := newInvokeBinding(t, contract, providerID, handler)
-	dispatcher := newInvokeDispatcher(t, options.authorizer, options.sink, options.defaultTimeout)
+	dispatcher := newInvokeDispatcher(t, options.sink, options.defaultTimeout)
 	catalog, err := NewCatalog([]Binding{binding})
 	if err != nil {
 		t.Fatalf("NewCatalog: %v", err)
@@ -828,11 +661,10 @@ func newInvokeHarness(
 	}
 }
 
-func newInvokeDispatcher(t *testing.T, authorizer Authorizer, sink audit.InvocationSink, timeout time.Duration) *Dispatcher {
+func newInvokeDispatcher(t *testing.T, sink audit.InvocationSink, timeout time.Duration) *Dispatcher {
 	t.Helper()
 	dispatcher, err := NewDispatcher(DispatcherOptions{
 		DefaultTimeout: timeout,
-		Authorizer:     authorizer,
 		AuditRecorder:  mustInvocationRecorder(t, sink),
 	})
 	if err != nil {
@@ -985,7 +817,7 @@ func (s *benchmarkCountingInvocationSink) PersistInvocation(_ context.Context, r
 
 func (*benchmarkCountingInvocationSink) Flush(context.Context) error { return nil }
 
-func benchmarkInvokeRuntime(b *testing.B, authorizer Authorizer, sink audit.InvocationSink) (Handle[invokeRequest, invokeResponse], context.Context, Binding) {
+func benchmarkInvokeRuntime(b *testing.B, sink audit.InvocationSink) (Handle[invokeRequest, invokeResponse], context.Context, Binding) {
 	b.Helper()
 	contract := capability.MustParseContract[invokeRequest, invokeResponse]("example.benchmark-invoke/v1")
 	endpoint, err := NewEndpoint(contract, func(_ context.Context, request invokeRequest) (invokeResponse, error) {
@@ -1015,7 +847,7 @@ func benchmarkInvokeRuntime(b *testing.B, authorizer Authorizer, sink audit.Invo
 	if err != nil {
 		b.Fatalf("NewInvocationRecorder: %v", err)
 	}
-	dispatcher, err := NewDispatcher(DispatcherOptions{DefaultTimeout: time.Second, Authorizer: authorizer, AuditRecorder: recorder})
+	dispatcher, err := NewDispatcher(DispatcherOptions{DefaultTimeout: time.Second, AuditRecorder: recorder})
 	if err != nil {
 		b.Fatalf("NewDispatcher: %v", err)
 	}
