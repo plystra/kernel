@@ -3,6 +3,7 @@ package invocation
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -84,6 +85,74 @@ func TestEndpointReturnsProviderErrorAndZeroResponse(t *testing.T) {
 	}
 	if response != (endpointResponse{}) {
 		t.Fatalf("response = %#v, want zero", response)
+	}
+}
+
+func TestEndpointPreservesOnlyDeclaredSemanticErrors(t *testing.T) {
+	t.Parallel()
+
+	contract := capability.MustParseContractWithSemanticErrors[endpointRequest, endpointResponse](
+		"example.semantic/v1",
+		"invalid_recipient",
+	)
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{name: "direct", err: endpointSemanticError("invalid_recipient")},
+		{name: "wrapped", err: fmt.Errorf("provider password=secret: %w", endpointSemanticError("invalid_recipient"))},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			endpoint, err := NewEndpoint(contract, func(context.Context, endpointRequest) (endpointResponse, error) {
+				return endpointResponse{Value: "must not escape"}, test.err
+			})
+			if err != nil {
+				t.Fatalf("NewEndpoint: %v", err)
+			}
+			response, err := invokeEndpoint[endpointRequest, endpointResponse](context.Background(), endpoint, contract.Definition(), endpointRequest{})
+			var semantic *SemanticError
+			if !errors.As(err, &semantic) || !semantic.valid() || semantic.SemanticErrorCode() != "invalid_recipient" {
+				t.Fatalf("semantic error = %#v / %v", semantic, err)
+			}
+			if response != (endpointResponse{}) || strings.Contains(err.Error(), "secret") {
+				t.Fatalf("semantic failure = %#v, %v", response, err)
+			}
+		})
+	}
+}
+
+func TestEndpointRejectsUnsafeSemanticErrors(t *testing.T) {
+	t.Parallel()
+
+	contract := capability.MustParseContractWithSemanticErrors[endpointRequest, endpointResponse](
+		"example.semantic/v1",
+		"invalid_recipient",
+	)
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{name: "undeclared", err: endpointSemanticError("temporarily_unavailable")},
+		{name: "malformed", err: endpointSemanticError("InvalidRecipient")},
+		{name: "code panic", err: endpointPanickingSemanticError{}},
+		{name: "as panic", err: endpointPanickingAsError{}},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			endpoint, err := NewEndpoint(contract, func(context.Context, endpointRequest) (endpointResponse, error) {
+				return endpointResponse{Value: "must not escape"}, test.err
+			})
+			if err != nil {
+				t.Fatalf("NewEndpoint: %v", err)
+			}
+			response, err := invokeEndpoint[endpointRequest, endpointResponse](context.Background(), endpoint, contract.Definition(), endpointRequest{})
+			if !errors.Is(err, errInvalidProviderSemanticError) || response != (endpointResponse{}) || strings.Contains(err.Error(), "secret") {
+				t.Fatalf("unsafe semantic failure = %#v, %v", response, err)
+			}
+		})
 	}
 }
 
@@ -218,4 +287,53 @@ func TestInvokeEndpointRejectsWrongErasedResponseType(t *testing.T) {
 	if response != (endpointResponse{}) {
 		t.Fatalf("response = %#v, want zero", response)
 	}
+}
+
+type endpointSemanticError string
+
+func (e endpointSemanticError) Error() string { return "provider secret: " + string(e) }
+
+func (e endpointSemanticError) SemanticErrorCode() string { return string(e) }
+
+type endpointPanickingSemanticError struct{}
+
+func (endpointPanickingSemanticError) Error() string { return "provider secret" }
+
+func (endpointPanickingSemanticError) SemanticErrorCode() string { panic("provider secret") }
+
+type endpointPanickingAsError struct{}
+
+func (endpointPanickingAsError) Error() string { return "provider secret" }
+
+func (endpointPanickingAsError) As(any) bool { panic("provider secret") }
+
+func FuzzEndpointSemanticErrorBoundary(f *testing.F) {
+	f.Add("invalid_recipient")
+	f.Add("temporarily_unavailable")
+	f.Add("InvalidRecipient")
+	f.Add("")
+
+	contract := capability.MustParseContractWithSemanticErrors[endpointRequest, endpointResponse]("example.semantic/v1", "invalid_recipient")
+	endpoint, err := NewEndpoint(contract, func(_ context.Context, request endpointRequest) (endpointResponse, error) {
+		return endpointResponse{Value: "must not escape"}, endpointSemanticError(request.Value)
+	})
+	if err != nil {
+		f.Fatalf("NewEndpoint: %v", err)
+	}
+	f.Fuzz(func(t *testing.T, code string) {
+		response, err := invokeEndpoint[endpointRequest, endpointResponse](context.Background(), endpoint, contract.Definition(), endpointRequest{Value: code})
+		if response != (endpointResponse{}) {
+			t.Fatalf("response = %#v, want zero", response)
+		}
+		if code == "invalid_recipient" {
+			var semantic *SemanticError
+			if !errors.As(err, &semantic) || semantic.SemanticErrorCode() != code {
+				t.Fatalf("declared semantic error = %#v / %v", semantic, err)
+			}
+			return
+		}
+		if !errors.Is(err, errInvalidProviderSemanticError) {
+			t.Fatalf("unsafe semantic code %q returned %v", code, err)
+		}
+	})
 }

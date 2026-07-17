@@ -269,6 +269,15 @@ func TestHandleInvokeNormalizesProviderFailuresAndPanics(t *testing.T) {
 		{name: "raw sensitive error", handler: func(context.Context, invokeRequest) (invokeResponse, error) {
 			return invokeResponse{}, errors.New("provider password=secret")
 		}, code: ErrorInternal, detail: detailProviderFailed},
+		{name: "undeclared semantic error", handler: func(context.Context, invokeRequest) (invokeResponse, error) {
+			return invokeResponse{}, endpointSemanticError("invalid_recipient")
+		}, code: ErrorInternal, detail: detailProviderFailed},
+		{name: "malformed semantic error", handler: func(context.Context, invokeRequest) (invokeResponse, error) {
+			return invokeResponse{}, endpointSemanticError("InvalidRecipient")
+		}, code: ErrorInternal, detail: detailProviderFailed},
+		{name: "semantic code panic", handler: func(context.Context, invokeRequest) (invokeResponse, error) {
+			return invokeResponse{}, endpointPanickingSemanticError{}
+		}, code: ErrorInternal, detail: detailProviderFailed},
 		{name: "normalizer panic", handler: func(context.Context, invokeRequest) (invokeResponse, error) {
 			return invokeResponse{}, panickingProviderError{}
 		}, code: ErrorInternal, detail: detailProviderFailed},
@@ -296,6 +305,31 @@ func TestHandleInvokeNormalizesProviderFailuresAndPanics(t *testing.T) {
 				t.Fatalf("safe boundary copy = %#v, want original %#v", boundary, test.wantShared)
 			}
 		})
+	}
+}
+
+func TestHandleInvokePreservesDeclaredSemanticError(t *testing.T) {
+	t.Parallel()
+
+	contract := capability.MustParseContractWithSemanticErrors[invokeRequest, invokeResponse](
+		"example.semantic-invoke/v1",
+		"invalid_recipient",
+		"temporarily_unavailable",
+	)
+	harness := newInvokeHarness(t, contract, func(context.Context, invokeRequest) (invokeResponse, error) {
+		return invokeResponse{Value: "must not escape"}, fmt.Errorf(
+			"provider password=secret: %w",
+			endpointSemanticError("invalid_recipient"),
+		)
+	}, invokeHarnessOptions{})
+
+	response, err := harness.handle.Invoke(harness.root, invokeRequest{})
+	var semantic *SemanticError
+	if !errors.As(err, &semantic) || !semantic.valid() || semantic.SemanticErrorCode() != "invalid_recipient" {
+		t.Fatalf("semantic error = %#v / %v", semantic, err)
+	}
+	if response != (invokeResponse{}) || strings.Contains(err.Error(), "password") || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("semantic Invoke = %#v, %v", response, err)
 	}
 }
 

@@ -29,8 +29,9 @@ type Endpoint struct {
 }
 
 // NewEndpoint adapts one typed handler without exposing erased invocation to
-// callers. Provider panics become ErrProviderPanic and never include the panic
-// payload in the returned error.
+// callers. Declared structural semantic errors become provider-neutral
+// SemanticError values. Provider panics become ErrProviderPanic and never
+// include the panic payload in the returned error.
 func NewEndpoint[Request, Response any](
 	contract capability.Contract[Request, Response],
 	handler capability.Handler[Request, Response],
@@ -53,11 +54,33 @@ func NewEndpoint[Request, Response any](
 			}()
 			response, err := handler(ctx, request.value)
 			if err != nil {
-				return nil, err
+				return nil, normalizeEndpointError(contract.Definition(), err)
 			}
 			return responseBox[Response]{value: response}, nil
 		},
 	}, nil
+}
+
+func normalizeEndpointError(definition capability.Definition, providerError error) (result error) {
+	result = providerError
+	defer func() {
+		if recover() != nil {
+			result = errInvalidProviderSemanticError
+		}
+	}()
+	var semantic capability.SemanticError
+	if !errors.As(providerError, &semantic) {
+		return result
+	}
+	code := semantic.SemanticErrorCode()
+	if !definition.DeclaresSemanticError(code) {
+		return errInvalidProviderSemanticError
+	}
+	boundary := newSemanticError(code)
+	if boundary == nil {
+		return errInvalidProviderSemanticError
+	}
+	return boundary
 }
 
 // Definition returns the exact typed capability declaration bound to the

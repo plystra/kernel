@@ -324,7 +324,7 @@ func parseErrorCodes(node *yaml.Node) ([]string, error) {
 	seen := make(map[string]struct{}, len(node.Content))
 	for index, item := range node.Content {
 		code, err := strictString(item)
-		if err != nil || !validFieldName(code) {
+		if err != nil || !capability.ValidSemanticErrorCode(code) {
 			return nil, invalidCapability("errors[%d] must be canonical lower snake case", index)
 		}
 		if _, duplicate := seen[code]; duplicate {

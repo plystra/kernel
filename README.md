@@ -51,6 +51,8 @@ The Kernel receives one complete immutable registry. It distinguishes exact Capa
 
 Go plugins share one process and are not sandboxed. Generated Capability clients are the supported application API; raw dispatch remains a low-level Kernel boundary rather than an encouraged bypass for ordinary plugin code.
 
+Typed contracts declare their exact semantic error codes. Generated semantic error types satisfy `capability.SemanticError` by reporting their code through `SemanticErrorCode() string`; at the provider endpoint, the Kernel preserves only a reported code declared by that same contract and converts it into an immutable provider-neutral `invocation.SemanticError`. Undeclared, malformed, or panicking semantic claims are normalized to `internal`; provider messages and causes never cross the boundary. Standard classified `invocation.Error` values and cancellation or deadline identities retain their existing safe behavior.
+
 ## Provider lifecycle
 
 Plugins that own resources requiring explicit startup and shutdown may implement `lifecycle.Provider`. Generated assembly binds only those plugins and supplies their already-resolved deterministic order; the Kernel does not discover providers or recompute dependencies at runtime. Plugins without lifecycle work remain valid and need no lifecycle methods.

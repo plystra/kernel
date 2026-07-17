@@ -3,6 +3,7 @@ package capability_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -24,7 +25,8 @@ func TestNewContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseIdentifier: %v", err)
 	}
-	contract, err := capability.NewContract[contractRequest, contractResponse](identifier)
+	var constructor func(capability.Identifier) (capability.Contract[contractRequest, contractResponse], error) = capability.NewContract[contractRequest, contractResponse]
+	contract, err := constructor(identifier)
 	if err != nil {
 		t.Fatalf("NewContract: %v", err)
 	}
@@ -64,6 +66,71 @@ func TestIndependentContractsWithSameIdentifierHaveDistinctDefinitions(t *testin
 	}
 }
 
+func TestNewContractNormalizesSemanticErrors(t *testing.T) {
+	t.Parallel()
+
+	identifier, err := capability.ParseIdentifier("example.semantic/v1")
+	if err != nil {
+		t.Fatalf("ParseIdentifier: %v", err)
+	}
+	input := []string{"temporarily_unavailable", "invalid_recipient"}
+	contract, err := capability.NewContractWithSemanticErrors[contractRequest, contractResponse](identifier, input...)
+	if err != nil {
+		t.Fatalf("NewContract: %v", err)
+	}
+	want := []string{"invalid_recipient", "temporarily_unavailable"}
+	if got := contract.SemanticErrors(); !slices.Equal(got, want) {
+		t.Fatalf("SemanticErrors = %q, want %q", got, want)
+	}
+	if got := contract.Definition().SemanticErrors(); !slices.Equal(got, want) {
+		t.Fatalf("Definition.SemanticErrors = %q, want %q", got, want)
+	}
+	if !contract.DeclaresSemanticError("invalid_recipient") ||
+		!contract.Definition().DeclaresSemanticError("temporarily_unavailable") ||
+		contract.DeclaresSemanticError("unknown_failure") ||
+		contract.DeclaresSemanticError("InvalidRecipient") {
+		t.Fatal("semantic error declaration lookup is incorrect")
+	}
+
+	input[0] = "changed_input"
+	returned := contract.SemanticErrors()
+	returned[0] = "changed_output"
+	if got := contract.SemanticErrors(); !slices.Equal(got, want) {
+		t.Fatalf("semantic declarations exposed mutable storage: %q", got)
+	}
+	copyOfContract := contract
+	if copyOfContract.Definition() != contract.Definition() || !slices.Equal(copyOfContract.SemanticErrors(), want) {
+		t.Fatal("contract copy did not preserve semantic declarations")
+	}
+}
+
+func TestNewContractRejectsInvalidSemanticErrors(t *testing.T) {
+	t.Parallel()
+
+	identifier, err := capability.ParseIdentifier("example.semantic/v1")
+	if err != nil {
+		t.Fatalf("ParseIdentifier: %v", err)
+	}
+	for _, codes := range [][]string{
+		{""},
+		{"InvalidRecipient"},
+		{"invalid-recipient"},
+		{"invalid__recipient"},
+		{"invalid_recipient_"},
+		{"provider.invalid_recipient"},
+		{strings.Repeat("a", capability.MaximumSemanticErrorCodeSize+1)},
+		{"invalid_recipient", "invalid_recipient"},
+	} {
+		contract, err := capability.NewContractWithSemanticErrors[contractRequest, contractResponse](identifier, codes...)
+		if !errors.Is(err, capability.ErrInvalidContract) {
+			t.Fatalf("NewContract(%q) error = %v, want ErrInvalidContract", codes, err)
+		}
+		if contract.Valid() || contract.Definition().Valid() || len(contract.SemanticErrors()) != 0 {
+			t.Fatalf("NewContract(%q) returned data: %#v", codes, contract)
+		}
+	}
+}
+
 func TestNewContractRejectsZeroIdentifier(t *testing.T) {
 	t.Parallel()
 
@@ -79,8 +146,13 @@ func TestNewContractRejectsZeroIdentifier(t *testing.T) {
 func TestMustParseContract(t *testing.T) {
 	t.Parallel()
 
-	contract := capability.MustParseContract[contractRequest, contractResponse]("example.operation/v2")
-	if !contract.Valid() || contract.Identifier().String() != "example.operation/v2" {
+	var parser func(string) capability.Contract[contractRequest, contractResponse] = capability.MustParseContract[contractRequest, contractResponse]
+	plain := parser("example.plain/v1")
+	if !plain.Valid() || len(plain.SemanticErrors()) != 0 {
+		t.Fatalf("plain contract = %#v", plain)
+	}
+	contract := capability.MustParseContractWithSemanticErrors[contractRequest, contractResponse]("example.operation/v2", "invalid_request")
+	if !contract.Valid() || contract.Identifier().String() != "example.operation/v2" || !contract.DeclaresSemanticError("invalid_request") {
 		t.Fatalf("contract = %#v", contract)
 	}
 }
@@ -102,6 +174,34 @@ func TestMustParseContractPanicsForInvalidIdentifier(t *testing.T) {
 		}
 	}()
 	_ = capability.MustParseContract[contractRequest, contractResponse]("invalid")
+}
+
+func TestMustParseContractPanicsForInvalidSemanticError(t *testing.T) {
+	t.Parallel()
+
+	defer func() {
+		value := recover()
+		panicError, ok := value.(error)
+		if !ok || !errors.Is(panicError, capability.ErrInvalidContract) || !strings.Contains(panicError.Error(), "semantic error code") {
+			t.Fatalf("panic = %#v, want invalid semantic error", value)
+		}
+	}()
+	_ = capability.MustParseContractWithSemanticErrors[contractRequest, contractResponse]("example.operation/v1", "InvalidError")
+}
+
+func TestValidSemanticErrorCode(t *testing.T) {
+	t.Parallel()
+
+	for _, code := range []string{"a", "invalid_recipient", "failure2", strings.Repeat("a", capability.MaximumSemanticErrorCodeSize)} {
+		if !capability.ValidSemanticErrorCode(code) {
+			t.Errorf("ValidSemanticErrorCode(%q) = false", code)
+		}
+	}
+	for _, code := range []string{"", "Invalid", "invalid-error", "invalid__error", "invalid_error_", "invalid.error", strings.Repeat("a", capability.MaximumSemanticErrorCodeSize+1)} {
+		if capability.ValidSemanticErrorCode(code) {
+			t.Errorf("ValidSemanticErrorCode(%q) = true", code)
+		}
+	}
 }
 
 func TestHandlerSupportsFunctionsAndMethodValues(t *testing.T) {
@@ -144,6 +244,29 @@ func TestHandlerSupportsFunctionsAndMethodValues(t *testing.T) {
 
 type contractService struct {
 	prefix string
+}
+
+func FuzzNewContractSemanticError(f *testing.F) {
+	f.Add("invalid_recipient")
+	f.Add("InvalidRecipient")
+	f.Add("")
+
+	identifier, err := capability.ParseIdentifier("example.semantic/v1")
+	if err != nil {
+		f.Fatalf("ParseIdentifier: %v", err)
+	}
+	f.Fuzz(func(t *testing.T, code string) {
+		contract, err := capability.NewContractWithSemanticErrors[contractRequest, contractResponse](identifier, code)
+		if !capability.ValidSemanticErrorCode(code) {
+			if !errors.Is(err, capability.ErrInvalidContract) || contract.Valid() {
+				t.Fatalf("invalid code %q returned %#v, %v", code, contract, err)
+			}
+			return
+		}
+		if err != nil || !contract.Valid() || !contract.DeclaresSemanticError(code) || !slices.Equal(contract.SemanticErrors(), []string{code}) {
+			t.Fatalf("valid code %q returned %#v, %v", code, contract, err)
+		}
+	})
 }
 
 func (s contractService) Handle(_ context.Context, request contractRequest) (contractResponse, error) {

@@ -65,7 +65,7 @@ func invokeBounded[Request, Response any](
 	handle Handle[Request, Response],
 	binding Binding,
 	request Request,
-) (Response, *Error) {
+) (Response, error) {
 	var zero Response
 	if boundary := invocationContextError(ctx); boundary != nil {
 		return zero, boundary
@@ -107,13 +107,16 @@ func boundaryForContextError(err error) *Error {
 	}
 }
 
-func normalizeProviderError(providerError error) (boundary *Error) {
+func normalizeProviderError(providerError error) (boundary error) {
 	boundary = newInvocationBoundary(ErrorInternal, detailProviderFailed)
 	defer func() {
 		if recover() != nil {
 			boundary = newInvocationBoundary(ErrorInternal, detailProviderFailed)
 		}
 	}()
+	if semantic, ok := providerError.(*SemanticError); ok && semantic.valid() {
+		return semantic
+	}
 	var safe *Error
 	if errors.As(providerError, &safe) && safe.valid() {
 		return safe
