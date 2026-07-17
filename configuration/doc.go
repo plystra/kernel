@@ -1,4 +1,4 @@
 // Package configuration provides intrinsic bounded runtime configuration,
-// strict typed value decoding, and Secret resolution used by CLI-generated
-// plugin adapters.
+// private object-map extraction, strict typed value decoding, and Secret
+// resolution used by CLI-generated plugin adapters and bootstrap code.
 package configuration
