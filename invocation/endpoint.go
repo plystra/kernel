@@ -1,4 +1,4 @@
-// Package invocation provides the Kernel's governed typed capability runtime.
+// Package invocation provides the Kernel's raw typed capability runtime.
 package invocation
 
 import (

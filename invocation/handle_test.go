@@ -5,7 +5,6 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/plystra/kernel/audit"
 	"github.com/plystra/kernel/capability"
 )
 
@@ -20,14 +19,14 @@ type handleResponse struct {
 func TestNewHandleBindsExactContractAndAvailability(t *testing.T) {
 	t.Parallel()
 
-	scope := testHandleScope(t)
+	dispatcher := newTestDispatcher(t)
 	contract := capability.MustParseContract[handleRequest, handleResponse]("example.handle/v1")
 	for _, available := range []bool{false, true} {
-		handle, err := NewHandle(scope, contract, available)
+		handle, err := NewHandle(dispatcher, contract, available)
 		if err != nil {
 			t.Fatalf("NewHandle(%t): %v", available, err)
 		}
-		if !handle.valid() || handle.scope.dispatcher != scope.dispatcher || handle.scope.caller != scope.caller {
+		if !handle.valid() || handle.dispatcher != dispatcher {
 			t.Fatalf("NewHandle(%t) = %#v", available, handle)
 		}
 		if handle.definition != contract.Definition() || handle.Identifier() != contract.Identifier() {
@@ -42,14 +41,14 @@ func TestNewHandleBindsExactContractAndAvailability(t *testing.T) {
 func TestHandlePreservesOpaqueDeclarationIdentity(t *testing.T) {
 	t.Parallel()
 
-	scope := testHandleScope(t)
+	dispatcher := newTestDispatcher(t)
 	first := capability.MustParseContract[handleRequest, handleResponse]("example.handle/v1")
 	second := capability.MustParseContract[handleRequest, handleResponse]("example.handle/v1")
-	firstHandle, err := NewHandle(scope, first, true)
+	firstHandle, err := NewHandle(dispatcher, first, true)
 	if err != nil {
 		t.Fatalf("NewHandle(first): %v", err)
 	}
-	secondHandle, err := NewHandle(scope, second, true)
+	secondHandle, err := NewHandle(dispatcher, second, true)
 	if err != nil {
 		t.Fatalf("NewHandle(second): %v", err)
 	}
@@ -60,27 +59,27 @@ func TestHandlePreservesOpaqueDeclarationIdentity(t *testing.T) {
 		t.Fatal("independent contract declarations shared handle identity")
 	}
 	copyOfFirst := firstHandle
-	if copyOfFirst.definition != firstHandle.definition || copyOfFirst.scope != firstHandle.scope {
-		t.Fatal("handle copy changed its bound scope or contract identity")
+	if copyOfFirst.definition != firstHandle.definition || copyOfFirst.dispatcher != firstHandle.dispatcher {
+		t.Fatal("handle copy changed its bound Dispatcher or contract identity")
 	}
 }
 
 func TestNewHandleRejectsInvalidInputs(t *testing.T) {
 	t.Parallel()
 
-	validScope := testHandleScope(t)
+	validDispatcher := newTestDispatcher(t)
 	validContract := capability.MustParseContract[handleRequest, handleResponse]("example.handle/v1")
-	var zeroScope Scope
 	var zeroContract capability.Contract[handleRequest, handleResponse]
 	for _, test := range []struct {
-		name     string
-		scope    Scope
-		contract capability.Contract[handleRequest, handleResponse]
+		name       string
+		dispatcher *Dispatcher
+		contract   capability.Contract[handleRequest, handleResponse]
 	}{
-		{name: "zero scope", scope: zeroScope, contract: validContract},
-		{name: "zero contract", scope: validScope, contract: zeroContract},
+		{name: "nil Dispatcher", contract: validContract},
+		{name: "zero Dispatcher", dispatcher: &Dispatcher{}, contract: validContract},
+		{name: "zero contract", dispatcher: validDispatcher, contract: zeroContract},
 	} {
-		handle, err := NewHandle(test.scope, test.contract, true)
+		handle, err := NewHandle(test.dispatcher, test.contract, true)
 		if !errors.Is(err, ErrInvalidHandle) {
 			t.Fatalf("%s error = %v, want ErrInvalidHandle", test.name, err)
 		}
@@ -94,27 +93,16 @@ func TestNewHandleRejectsInvalidInputs(t *testing.T) {
 	}
 }
 
-func TestHandleExposesGovernedInvocationWithoutMutableState(t *testing.T) {
+func TestHandleExposesRawInvocationWithoutMutableState(t *testing.T) {
 	t.Parallel()
 
 	handleType := reflect.TypeFor[Handle[handleRequest, handleResponse]]()
 	if _, exists := handleType.MethodByName("Invoke"); !exists {
-		t.Fatal("Handle omitted governed invocation")
+		t.Fatal("Handle omitted raw invocation")
 	}
 	for index := range handleType.NumField() {
 		if field := handleType.Field(index); field.IsExported() {
 			t.Fatalf("Handle field %q exposes mutable runtime state", field.Name)
 		}
 	}
-}
-
-func testHandleScope(t *testing.T) Scope {
-	t.Helper()
-
-	dispatcher := newTestDispatcher(t)
-	scope, err := dispatcher.Scope(audit.NewKernelCallerIdentity())
-	if err != nil {
-		t.Fatalf("Scope: %v", err)
-	}
-	return scope
 }

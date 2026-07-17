@@ -8,18 +8,18 @@ import (
 )
 
 const (
-	detailInvalidHandle           = "runtime.invalid_handle"
-	detailGovernedContextRequired = "runtime.governed_context_required"
-	detailDispatcherNotReady      = "runtime.dispatcher_not_ready"
-	detailCapabilityUnavailable   = "runtime.capability_unavailable"
-	detailInvocationIDFailed      = "runtime.invocation_id_failed"
-	detailDeadlineExceeded        = "runtime.deadline_exceeded"
-	detailInvocationCancelled     = "runtime.cancelled"
-	detailProviderPanic           = "provider.panic_recovered"
-	detailContractMismatch        = "runtime.contract_mismatch"
-	detailInvalidEndpoint         = "runtime.invalid_endpoint"
-	detailProviderFailed          = "provider.failed"
-	detailErrorNormalization      = "runtime.error_normalization_failed"
+	detailInvalidHandle         = "runtime.invalid_handle"
+	detailContextRequired       = "runtime.context_required"
+	detailDispatcherNotReady    = "runtime.dispatcher_not_ready"
+	detailCapabilityUnavailable = "runtime.capability_unavailable"
+	detailInvocationIDFailed    = "runtime.invocation_id_failed"
+	detailDeadlineExceeded      = "runtime.deadline_exceeded"
+	detailInvocationCancelled   = "runtime.cancelled"
+	detailProviderPanic         = "provider.panic_recovered"
+	detailContractMismatch      = "runtime.contract_mismatch"
+	detailInvalidEndpoint       = "runtime.invalid_endpoint"
+	detailProviderFailed        = "provider.failed"
+	detailErrorNormalization    = "runtime.error_normalization_failed"
 )
 
 // Invoke executes one exact canonical capability through raw Kernel dispatch.
@@ -30,13 +30,13 @@ func (h Handle[Request, Response]) Invoke(ctx context.Context, request Request) 
 		return zero, newInvocationBoundary(audit.ErrorInternal, detailInvalidHandle)
 	}
 	if ctx == nil {
-		return zero, newInvocationBoundary(audit.ErrorInvalidArgument, detailGovernedContextRequired)
+		return zero, newInvocationBoundary(audit.ErrorInvalidArgument, detailContextRequired)
 	}
 	if !h.available {
 		return zero, newInvocationBoundary(audit.ErrorUnavailable, detailCapabilityUnavailable)
 	}
 
-	state, err := h.scope.dispatcher.snapshot()
+	state, err := h.dispatcher.snapshot()
 	if err != nil {
 		return zero, newInvocationBoundary(audit.ErrorUnavailable, detailDispatcherNotReady)
 	}
@@ -49,9 +49,9 @@ func (h Handle[Request, Response]) Invoke(ctx context.Context, request Request) 
 	if err != nil {
 		return zero, newInvocationBoundary(audit.ErrorInternal, detailInvocationIDFailed)
 	}
-	callContext, cleanup, err := enterInvocationContext(ctx, invocationID, h.scope.dispatcher.defaultTimeout)
+	callContext, cleanup, err := enterInvocationContext(ctx, invocationID, h.dispatcher.defaultTimeout)
 	if err != nil {
-		return zero, newInvocationBoundary(audit.ErrorInvalidArgument, detailGovernedContextRequired)
+		return zero, newInvocationBoundary(audit.ErrorInvalidArgument, detailContextRequired)
 	}
 	defer cleanup()
 
@@ -88,7 +88,7 @@ func invokeBounded[Request, Response any](
 
 func invocationContextError(ctx context.Context) *Error {
 	if ctx == nil {
-		return newInvocationBoundary(audit.ErrorInvalidArgument, detailGovernedContextRequired)
+		return newInvocationBoundary(audit.ErrorInvalidArgument, detailContextRequired)
 	}
 	if frame, exists := runtimeFrameFrom(ctx); exists {
 		if boundary := boundaryForContextError(frame.authority.Err()); boundary != nil {

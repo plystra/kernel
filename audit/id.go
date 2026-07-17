@@ -13,10 +13,10 @@ const (
 	maximumRuntimeIDAttempts = 4
 )
 
-// ErrInvalidRuntimeID reports a non-canonical or zero runtime audit ID.
-var ErrInvalidRuntimeID = errors.New("invalid runtime audit ID")
+// ErrInvalidRuntimeID reports a non-canonical or zero runtime ID.
+var ErrInvalidRuntimeID = errors.New("invalid runtime ID")
 
-// InvocationID identifies one audited capability invocation.
+// InvocationID identifies one capability invocation.
 type InvocationID struct {
 	value string
 }
@@ -118,19 +118,19 @@ func randomRuntimeID() (string, error) {
 
 func randomRuntimeIDFrom(source io.Reader) (string, error) {
 	if source == nil {
-		return "", errors.New("generate runtime audit ID: nil randomness source")
+		return "", errors.New("generate runtime ID: nil randomness source")
 	}
 	var raw [16]byte
 	for range maximumRuntimeIDAttempts {
 		if _, err := io.ReadFull(source, raw[:]); err != nil {
-			return "", fmt.Errorf("generate runtime audit ID: %w", err)
+			return "", fmt.Errorf("generate runtime ID: %w", err)
 		}
 		value := hex.EncodeToString(raw[:])
 		if validRuntimeID(value) {
 			return value, nil
 		}
 	}
-	return "", errors.New("generate runtime audit ID: randomness repeatedly produced zero")
+	return "", errors.New("generate runtime ID: randomness repeatedly produced zero")
 }
 
 func validRuntimeID(value string) bool {

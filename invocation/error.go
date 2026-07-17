@@ -11,7 +11,7 @@ import (
 var ErrInvalidError = errors.New("invalid capability invocation error")
 
 // Error is an immutable safe capability-boundary failure. It carries only a
-// closed audit class and an optional validated machine-readable detail code;
+// closed failure class and an optional validated machine-readable detail code;
 // provider causes and free-form messages are never stored.
 type Error struct {
 	code       audit.ErrorCode
@@ -20,7 +20,7 @@ type Error struct {
 }
 
 // NewError creates one safe classified capability failure. Denials require a
-// stable detail code so their authorization reason remains auditable.
+// stable detail code so callers can distinguish policy reasons safely.
 func NewError(code audit.ErrorCode, detailCode string) (*Error, error) {
 	boundary := &Error{
 		code:       code,

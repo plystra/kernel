@@ -19,7 +19,7 @@ const (
 // provenance.
 var ErrInvalidModuleBuild = errors.New("invalid runtime module build provenance")
 
-// ModuleBuild is immutable embedded Go module provenance for an audited runtime
+// ModuleBuild is immutable embedded Go module provenance for a runtime
 // implementation. Go remains authoritative for dependency resolution; this is
 // observability metadata, not a second lockfile.
 type ModuleBuild struct {

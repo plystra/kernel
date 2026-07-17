@@ -28,12 +28,11 @@ func TestHandleInvokeRunsCompleteRawDispatchPath(t *testing.T) {
 	t.Parallel()
 
 	contract := capability.MustParseContract[invokeRequest, invokeResponse]("example.invoke/v1")
-	security := testGovernedSecurityContext(t)
 	var providerContext InvocationContext
 	harness := newInvokeHarness(t, contract, func(ctx context.Context, request invokeRequest) (invokeResponse, error) {
 		current, exists := Current(ctx)
 		if !exists {
-			t.Fatal("provider did not receive governed invocation context")
+			t.Fatal("provider did not receive invocation context")
 		}
 		deadline, hasDeadline := ctx.Deadline()
 		if !hasDeadline || !deadline.Equal(current.Deadline()) {
@@ -41,18 +40,19 @@ func TestHandleInvokeRunsCompleteRawDispatchPath(t *testing.T) {
 		}
 		providerContext = current
 		return invokeResponse{Value: "handled:" + request.Value}, nil
-	}, invokeHarnessOptions{security: security})
+	}, invokeHarnessOptions{})
 
 	response, err := harness.handle.Invoke(harness.root, invokeRequest{Value: "request"})
 	if err != nil || response.Value != "handled:request" {
 		t.Fatalf("Invoke = %#v, %v", response, err)
 	}
-	rootRequestID, _ := RequestID(harness.root)
-	rootTraceID, _ := TraceID(harness.root)
-	if providerContext.RequestID() != rootRequestID || providerContext.TraceID() != rootTraceID ||
-		!providerContext.InvocationID().Valid() || providerContext.ParentInvocationID().Valid() ||
-		providerContext.SecurityContext() != security {
+	if !providerContext.RequestID().Valid() || !providerContext.TraceID().Valid() ||
+		providerContext.RequestID().String() == providerContext.TraceID().String() ||
+		!providerContext.InvocationID().Valid() || providerContext.ParentInvocationID().Valid() {
 		t.Fatalf("provider context = %#v", providerContext)
+	}
+	if _, exists := RequestID(harness.root); exists {
+		t.Fatal("Invoke mutated its caller context")
 	}
 }
 
@@ -82,36 +82,26 @@ func TestHandleInvokeDispatchesKernelProvider(t *testing.T) {
 	if err := dispatcher.Publish(catalog); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
-	handle, root := newInvokeHandleAndRoot(t, dispatcher, contract, testAnonymousSecurityContext(t))
+	handle, root := newInvokeHandleAndContext(t, dispatcher, contract)
 	response, err := handle.Invoke(root, invokeRequest{})
 	if err != nil || response.Value != "kernel" {
 		t.Fatalf("Invoke = %#v, %v", response, err)
 	}
 }
 
-func TestHandleInvokePropagatesNestedAncestryAndSecurity(t *testing.T) {
+func TestHandleInvokePropagatesNestedAncestry(t *testing.T) {
 	t.Parallel()
 
 	outerContract := capability.MustParseContract[invokeRequest, invokeResponse]("example.outer/v1")
 	innerContract := capability.MustParseContract[invokeRequest, invokeResponse]("example.inner/v1")
 	outerProviderID := mustPluginID(t, "acme.invoke.outer")
 	innerProviderID := mustPluginID(t, "acme.invoke.inner")
-	callerID := mustPluginID(t, "acme.invoke.caller")
-	security := testGovernedSecurityContext(t)
 	dispatcher, err := NewDispatcher(DispatcherOptions{DefaultTimeout: time.Second})
 	if err != nil {
 		t.Fatalf("NewDispatcher: %v", err)
 	}
 
-	outerProviderCaller, err := audit.NewPluginCallerIdentity(outerProviderID)
-	if err != nil {
-		t.Fatalf("NewPluginCallerIdentity(outer provider): %v", err)
-	}
-	innerScope, err := dispatcher.Scope(outerProviderCaller)
-	if err != nil {
-		t.Fatalf("inner Scope: %v", err)
-	}
-	innerHandle, err := NewHandle(innerScope, innerContract, true)
+	innerHandle, err := NewHandle(dispatcher, innerContract, true)
 	if err != nil {
 		t.Fatalf("NewHandle(inner): %v", err)
 	}
@@ -145,19 +135,11 @@ func TestHandleInvokePropagatesNestedAncestryAndSecurity(t *testing.T) {
 		t.Fatalf("Publish: %v", err)
 	}
 
-	callerIdentity, err := audit.NewPluginCallerIdentity(callerID)
-	if err != nil {
-		t.Fatalf("NewPluginCallerIdentity(caller): %v", err)
-	}
-	outerScope, err := dispatcher.Scope(callerIdentity)
-	if err != nil {
-		t.Fatalf("outer Scope: %v", err)
-	}
-	outerHandle, err := NewHandle(outerScope, outerContract, true)
+	outerHandle, err := NewHandle(dispatcher, outerContract, true)
 	if err != nil {
 		t.Fatalf("NewHandle(outer): %v", err)
 	}
-	root := newInvokeRoot(t, dispatcher, context.Background(), security)
+	root := context.Background()
 	response, err := outerHandle.Invoke(root, invokeRequest{Value: "request"})
 	if err != nil || response.Value != "outer:inner:request" {
 		t.Fatalf("outer Invoke = %#v, %v", response, err)
@@ -165,13 +147,12 @@ func TestHandleInvokePropagatesNestedAncestryAndSecurity(t *testing.T) {
 
 	if !outerContext.InvocationID().Valid() || !innerContext.InvocationID().Valid() ||
 		innerContext.ParentInvocationID() != outerContext.InvocationID() || outerContext.ParentInvocationID().Valid() ||
-		innerContext.RequestID() != outerContext.RequestID() || innerContext.TraceID() != outerContext.TraceID() ||
-		innerContext.SecurityContext() != security || outerContext.SecurityContext() != security {
+		innerContext.RequestID() != outerContext.RequestID() || innerContext.TraceID() != outerContext.TraceID() {
 		t.Fatalf("nested contexts = outer %#v / inner %#v", outerContext, innerContext)
 	}
 }
 
-func TestHandleInvokeRejectsNestedCallThatDropsGovernedContext(t *testing.T) {
+func TestHandleInvokeTreatsDroppedContextAsIndependentCall(t *testing.T) {
 	t.Parallel()
 
 	outerContract := capability.MustParseContract[invokeRequest, invokeResponse]("example.context-outer/v1")
@@ -179,25 +160,21 @@ func TestHandleInvokeRejectsNestedCallThatDropsGovernedContext(t *testing.T) {
 	outerProviderID := mustPluginID(t, "acme.context.outer")
 	innerProviderID := mustPluginID(t, "acme.context.inner")
 	dispatcher := newInvokeDispatcher(t, time.Second)
-	outerProviderCaller, err := audit.NewPluginCallerIdentity(outerProviderID)
-	if err != nil {
-		t.Fatalf("NewPluginCallerIdentity: %v", err)
-	}
-	innerScope, err := dispatcher.Scope(outerProviderCaller)
-	if err != nil {
-		t.Fatalf("inner Scope: %v", err)
-	}
-	innerHandle, err := NewHandle(innerScope, innerContract, true)
+	innerHandle, err := NewHandle(dispatcher, innerContract, true)
 	if err != nil {
 		t.Fatalf("NewHandle(inner): %v", err)
 	}
 	var innerProviderCalls atomic.Int32
-	innerBinding := newInvokeBinding(t, innerContract, innerProviderID, func(context.Context, invokeRequest) (invokeResponse, error) {
+	var outerContext InvocationContext
+	var innerContext InvocationContext
+	innerBinding := newInvokeBinding(t, innerContract, innerProviderID, func(ctx context.Context, request invokeRequest) (invokeResponse, error) {
 		innerProviderCalls.Add(1)
-		return invokeResponse{}, nil
+		innerContext, _ = Current(ctx)
+		return invokeResponse{Value: "inner:" + request.Value}, nil
 	})
-	outerBinding := newInvokeBinding(t, outerContract, outerProviderID, func(context.Context, invokeRequest) (invokeResponse, error) {
-		return innerHandle.Invoke(context.Background(), invokeRequest{})
+	outerBinding := newInvokeBinding(t, outerContract, outerProviderID, func(ctx context.Context, request invokeRequest) (invokeResponse, error) {
+		outerContext, _ = Current(ctx)
+		return innerHandle.Invoke(context.Background(), request)
 	})
 	catalog, err := NewCatalog([]Binding{outerBinding, innerBinding})
 	if err != nil {
@@ -206,11 +183,14 @@ func TestHandleInvokeRejectsNestedCallThatDropsGovernedContext(t *testing.T) {
 	if err := dispatcher.Publish(catalog); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
-	outerHandle, root := newInvokeHandleAndRoot(t, dispatcher, outerContract, testGovernedSecurityContext(t))
-	response, err := outerHandle.Invoke(root, invokeRequest{})
-	requireInvocationError(t, err, audit.ErrorInvalidArgument, detailGovernedContextRequired)
-	if response != (invokeResponse{}) || innerProviderCalls.Load() != 0 {
-		t.Fatalf("dropped nested context = %#v, %v, inner provider calls %d", response, err, innerProviderCalls.Load())
+	outerHandle, root := newInvokeHandleAndContext(t, dispatcher, outerContract)
+	response, err := outerHandle.Invoke(root, invokeRequest{Value: "request"})
+	if err != nil || response.Value != "inner:request" || innerProviderCalls.Load() != 1 {
+		t.Fatalf("independent nested context = %#v, %v, inner provider calls %d", response, err, innerProviderCalls.Load())
+	}
+	if !outerContext.InvocationID().Valid() || !innerContext.InvocationID().Valid() || innerContext.ParentInvocationID().Valid() ||
+		innerContext.RequestID() == outerContext.RequestID() || innerContext.TraceID() == outerContext.TraceID() {
+		t.Fatalf("independent contexts = outer %#v / inner %#v", outerContext, innerContext)
 	}
 }
 
@@ -244,17 +224,19 @@ func TestHandleInvokeIsSafeForConcurrentRootCalls(t *testing.T) {
 	group.Wait()
 
 	close(contexts)
-	requestID, _ := RequestID(harness.root)
-	traceID, _ := TraceID(harness.root)
+	requests := make(map[audit.RequestID]struct{}, calls)
+	traces := make(map[audit.TraceID]struct{}, calls)
 	invocations := make(map[audit.InvocationID]struct{}, calls)
 	for current := range contexts {
-		if current.RequestID() != requestID || current.TraceID() != traceID || current.ParentInvocationID().Valid() {
+		if !current.RequestID().Valid() || !current.TraceID().Valid() || !current.InvocationID().Valid() || current.ParentInvocationID().Valid() {
 			t.Fatalf("concurrent context = %#v", current)
 		}
+		requests[current.RequestID()] = struct{}{}
+		traces[current.TraceID()] = struct{}{}
 		invocations[current.InvocationID()] = struct{}{}
 	}
-	if len(invocations) != calls {
-		t.Fatalf("unique invocations = %d, want %d", len(invocations), calls)
+	if len(requests) != calls || len(traces) != calls || len(invocations) != calls {
+		t.Fatalf("unique request/trace/invocation IDs = %d/%d/%d, want %d", len(requests), len(traces), len(invocations), calls)
 	}
 }
 
@@ -336,7 +318,7 @@ func TestHandleInvokeAppliesDeadlineToProvider(t *testing.T) {
 	}
 }
 
-func TestHandleInvokePropagatesTrustedCancellation(t *testing.T) {
+func TestHandleInvokePropagatesCancellation(t *testing.T) {
 	t.Parallel()
 
 	parent, cancel := context.WithCancel(context.Background())
@@ -354,7 +336,7 @@ func TestHandleInvokePropagatesTrustedCancellation(t *testing.T) {
 	}
 }
 
-func TestHandleInvokeRejectsPreCancelledTrustedAuthorityThroughDetachedContext(t *testing.T) {
+func TestHandleInvokeRejectsPreCancelledContext(t *testing.T) {
 	t.Parallel()
 
 	parent, cancel := context.WithCancel(context.Background())
@@ -365,19 +347,15 @@ func TestHandleInvokeRejectsPreCancelledTrustedAuthorityThroughDetachedContext(t
 		return invokeResponse{}, nil
 	}, invokeHarnessOptions{parent: parent})
 	cancel()
-	detached := context.WithoutCancel(harness.root)
-	if detached.Err() != nil {
-		t.Fatalf("detached context error = %v", detached.Err())
-	}
 
-	response, err := harness.handle.Invoke(detached, invokeRequest{})
+	response, err := harness.handle.Invoke(harness.root, invokeRequest{})
 	requireInvocationError(t, err, audit.ErrorCancelled, detailInvocationCancelled)
 	if !errors.Is(err, context.Canceled) || response != (invokeResponse{}) || providerCalls.Load() != 0 {
 		t.Fatalf("pre-cancelled Invoke = %#v, %v, provider calls %d", response, err, providerCalls.Load())
 	}
 }
 
-func TestHandleInvokeRechecksTrustedCancellationAfterFastProviderReturn(t *testing.T) {
+func TestHandleInvokeRechecksCancellationAfterFastProviderReturn(t *testing.T) {
 	t.Parallel()
 
 	parent, cancel := context.WithCancel(context.Background())
@@ -394,7 +372,7 @@ func TestHandleInvokeRechecksTrustedCancellationAfterFastProviderReturn(t *testi
 	}
 }
 
-func TestHandleInvokeClassifiesTrustedAuthorityDeadline(t *testing.T) {
+func TestHandleInvokeClassifiesCallerDeadline(t *testing.T) {
 	t.Parallel()
 
 	parent, cancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
@@ -422,7 +400,7 @@ func TestHandleInvokeRejectsContractMismatchWithoutCallingProvider(t *testing.T)
 		providerCalls.Add(1)
 		return invokeResponse{}, nil
 	}, invokeHarnessOptions{})
-	handle, err := NewHandle(harness.handle.scope, callerContract, true)
+	handle, err := NewHandle(harness.dispatcher, callerContract, true)
 	if err != nil {
 		t.Fatalf("NewHandle: %v", err)
 	}
@@ -448,10 +426,8 @@ func TestHandleInvokeRejectsPreEntryFailuresWithoutProviderExecution(t *testing.
 	requireInvocationError(t, err, audit.ErrorInternal, detailInvalidHandle)
 	var nilContext context.Context
 	_, err = harness.handle.Invoke(nilContext, invokeRequest{})
-	requireInvocationError(t, err, audit.ErrorInvalidArgument, detailGovernedContextRequired)
-	_, err = harness.handle.Invoke(context.Background(), invokeRequest{})
-	requireInvocationError(t, err, audit.ErrorInvalidArgument, detailGovernedContextRequired)
-	unavailable, err := NewHandle(harness.handle.scope, contract, false)
+	requireInvocationError(t, err, audit.ErrorInvalidArgument, detailContextRequired)
+	unavailable, err := NewHandle(harness.dispatcher, contract, false)
 	if err != nil {
 		t.Fatalf("NewHandle(unavailable): %v", err)
 	}
@@ -459,7 +435,7 @@ func TestHandleInvokeRejectsPreEntryFailuresWithoutProviderExecution(t *testing.
 	requireInvocationError(t, err, audit.ErrorUnavailable, detailCapabilityUnavailable)
 
 	unpublished := newInvokeDispatcher(t, time.Second)
-	unpublishedHandle, unpublishedRoot := newInvokeHandleAndRoot(t, unpublished, contract, testAnonymousSecurityContext(t))
+	unpublishedHandle, unpublishedRoot := newInvokeHandleAndContext(t, unpublished, contract)
 	_, err = unpublishedHandle.Invoke(unpublishedRoot, invokeRequest{})
 	requireInvocationError(t, err, audit.ErrorUnavailable, detailDispatcherNotReady)
 
@@ -471,7 +447,7 @@ func TestHandleInvokeRejectsPreEntryFailuresWithoutProviderExecution(t *testing.
 	if err := empty.Publish(emptyCatalog); err != nil {
 		t.Fatalf("Publish(empty): %v", err)
 	}
-	emptyHandle, emptyRoot := newInvokeHandleAndRoot(t, empty, contract, testAnonymousSecurityContext(t))
+	emptyHandle, emptyRoot := newInvokeHandleAndContext(t, empty, contract)
 	_, err = emptyHandle.Invoke(emptyRoot, invokeRequest{})
 	requireInvocationError(t, err, audit.ErrorUnavailable, detailCapabilityUnavailable)
 
@@ -497,7 +473,6 @@ func BenchmarkKernelCanonicalDispatch(b *testing.B) {
 }
 
 type invokeHarnessOptions struct {
-	security       audit.SecurityContext
 	parent         context.Context
 	defaultTimeout time.Duration
 }
@@ -516,9 +491,6 @@ func newInvokeHarness(
 	options invokeHarnessOptions,
 ) invokeHarness {
 	t.Helper()
-	if !options.security.Valid() {
-		options.security = testAnonymousSecurityContext(t)
-	}
 	if options.parent == nil {
 		options.parent = context.Background()
 	}
@@ -535,23 +507,14 @@ func newInvokeHarness(
 	if err := dispatcher.Publish(catalog); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
-	callerID := mustPluginID(t, "acme.invoke.caller")
-	caller, err := audit.NewPluginCallerIdentity(callerID)
-	if err != nil {
-		t.Fatalf("NewPluginCallerIdentity: %v", err)
-	}
-	scope, err := dispatcher.Scope(caller)
-	if err != nil {
-		t.Fatalf("Scope: %v", err)
-	}
-	handle, err := NewHandle(scope, contract, true)
+	handle, err := NewHandle(dispatcher, contract, true)
 	if err != nil {
 		t.Fatalf("NewHandle: %v", err)
 	}
 	return invokeHarness{
 		dispatcher: dispatcher,
 		handle:     handle,
-		root:       newInvokeRoot(t, dispatcher, options.parent, options.security),
+		root:       options.parent,
 		binding:    binding,
 	}
 }
@@ -565,39 +528,17 @@ func newInvokeDispatcher(t *testing.T, timeout time.Duration) *Dispatcher {
 	return dispatcher
 }
 
-func newInvokeHandleAndRoot(
+func newInvokeHandleAndContext(
 	t *testing.T,
 	dispatcher *Dispatcher,
 	contract capability.Contract[invokeRequest, invokeResponse],
-	security audit.SecurityContext,
 ) (Handle[invokeRequest, invokeResponse], context.Context) {
 	t.Helper()
-	caller, err := audit.NewPluginCallerIdentity(mustPluginID(t, "acme.invoke.caller"))
-	if err != nil {
-		t.Fatalf("NewPluginCallerIdentity: %v", err)
-	}
-	scope, err := dispatcher.Scope(caller)
-	if err != nil {
-		t.Fatalf("Scope: %v", err)
-	}
-	handle, err := NewHandle(scope, contract, true)
+	handle, err := NewHandle(dispatcher, contract, true)
 	if err != nil {
 		t.Fatalf("NewHandle: %v", err)
 	}
-	return handle, newInvokeRoot(t, dispatcher, context.Background(), security)
-}
-
-func newInvokeRoot(t *testing.T, dispatcher *Dispatcher, parent context.Context, security audit.SecurityContext) context.Context {
-	t.Helper()
-	kernelScope, err := dispatcher.Scope(audit.NewKernelCallerIdentity())
-	if err != nil {
-		t.Fatalf("Kernel Scope: %v", err)
-	}
-	root, err := kernelScope.NewRootContext(parent, security)
-	if err != nil {
-		t.Fatalf("NewRootContext: %v", err)
-	}
-	return root
+	return handle, context.Background()
 }
 
 func newInvokeBinding(
@@ -671,35 +612,11 @@ func benchmarkInvokeRuntime(b *testing.B) (Handle[invokeRequest, invokeResponse]
 	if err := dispatcher.Publish(catalog); err != nil {
 		b.Fatalf("Publish: %v", err)
 	}
-	callerID, err := plugin.ParseID("acme.benchmark.caller")
-	if err != nil {
-		b.Fatalf("ParseID(caller): %v", err)
-	}
-	caller, err := audit.NewPluginCallerIdentity(callerID)
-	if err != nil {
-		b.Fatalf("NewPluginCallerIdentity: %v", err)
-	}
-	callerScope, err := dispatcher.Scope(caller)
-	if err != nil {
-		b.Fatalf("Scope(caller): %v", err)
-	}
-	handle, err := NewHandle(callerScope, contract, true)
+	handle, err := NewHandle(dispatcher, contract, true)
 	if err != nil {
 		b.Fatalf("NewHandle: %v", err)
 	}
-	kernelScope, err := dispatcher.Scope(audit.NewKernelCallerIdentity())
-	if err != nil {
-		b.Fatalf("Scope(Kernel): %v", err)
-	}
-	security, err := audit.NewSecurityContext(audit.SecurityContextOptions{CallerPrincipal: audit.NewAnonymousPrincipal()})
-	if err != nil {
-		b.Fatalf("NewSecurityContext: %v", err)
-	}
-	root, err := kernelScope.NewRootContext(context.Background(), security)
-	if err != nil {
-		b.Fatalf("NewRootContext: %v", err)
-	}
-	return handle, root, binding
+	return handle, context.Background(), binding
 }
 
 var benchmarkInvokeResponse invokeResponse

@@ -10,66 +10,35 @@ import (
 	"github.com/plystra/kernel/audit"
 )
 
-// ErrInvalidInvocationContext reports a missing, corrupt, or untrusted runtime
-// invocation frame.
+// ErrInvalidInvocationContext reports a nil, corrupt, or internally
+// contradictory invocation context.
 var ErrInvalidInvocationContext = errors.New("invalid runtime invocation context")
 
 type runtimeFrameKey struct{}
 
-// runtimeFrame is immutable Kernel-owned ancestry and security state. The
-// ordinary Go context remains the value carrier but cannot fabricate this key.
+// runtimeFrame is immutable Kernel-owned ancestry and deadline state. Ordinary
+// Go context remains the carrier; application identity is not part of the frame.
 type runtimeFrame struct {
 	requestID    audit.RequestID
 	traceID      audit.TraceID
 	invocationID audit.InvocationID
 	parentID     audit.InvocationID
-	security     audit.SecurityContext
 	deadline     time.Time
 	authority    context.Context
 }
 
-// InvocationContext is the read-only governed context visible to a provider.
+// InvocationContext is the read-only identity-neutral runtime frame visible to
+// a provider during one call.
 type InvocationContext struct {
 	requestID    audit.RequestID
 	traceID      audit.TraceID
 	invocationID audit.InvocationID
 	parentID     audit.InvocationID
-	security     audit.SecurityContext
 	deadline     time.Time
 }
 
-// NewRootContext mints one root request frame through a Kernel caller scope.
-// Plugin scopes cannot create roots, and an existing frame cannot be replaced.
-func (s Scope) NewRootContext(parent context.Context, security audit.SecurityContext) (context.Context, error) {
-	if !s.valid() || s.caller.Kind() != audit.CallerKindKernel || parent == nil || !security.Valid() {
-		return nil, ErrInvalidInvocationContext
-	}
-	if parent.Value(runtimeFrameKey{}) != nil {
-		return nil, ErrInvalidInvocationContext
-	}
-	requestID, err := audit.NewRequestID()
-	if err != nil {
-		return nil, fmt.Errorf("%w: generate request identity: %v", ErrInvalidInvocationContext, err)
-	}
-	traceID, err := audit.NewTraceID()
-	if err != nil {
-		return nil, fmt.Errorf("%w: generate trace identity: %v", ErrInvalidInvocationContext, err)
-	}
-	deadline, _ := parent.Deadline()
-	frame := runtimeFrame{
-		requestID: requestID,
-		traceID:   traceID,
-		security:  security,
-		deadline:  deadline,
-		authority: parent,
-	}
-	if !frame.validRoot() {
-		return nil, ErrInvalidInvocationContext
-	}
-	return context.WithValue(parent, runtimeFrameKey{}, frame), nil
-}
-
-// RequestID returns the runtime-owned root request identity.
+// RequestID returns the runtime-owned root request identity when ctx is an
+// active provider invocation context.
 func RequestID(ctx context.Context) (audit.RequestID, bool) {
 	frame, exists := runtimeFrameFrom(ctx)
 	if !exists {
@@ -78,7 +47,8 @@ func RequestID(ctx context.Context) (audit.RequestID, bool) {
 	return frame.requestID, true
 }
 
-// TraceID returns the runtime-owned invocation call-chain identity.
+// TraceID returns the runtime-owned invocation call-chain identity when ctx is
+// an active provider invocation context.
 func TraceID(ctx context.Context) (audit.TraceID, bool) {
 	frame, exists := runtimeFrameFrom(ctx)
 	if !exists {
@@ -87,11 +57,10 @@ func TraceID(ctx context.Context) (audit.TraceID, bool) {
 	return frame.traceID, true
 }
 
-// Current returns the governed frame for the current provider invocation.
-// Root request frames are intentionally not provider-visible invocations.
+// Current returns the Kernel frame for the current provider invocation.
 func Current(ctx context.Context) (InvocationContext, bool) {
 	frame, exists := runtimeFrameFrom(ctx)
-	if !exists || !frame.invocationID.Valid() {
+	if !exists {
 		return InvocationContext{}, false
 	}
 	return InvocationContext{
@@ -99,7 +68,6 @@ func Current(ctx context.Context) (InvocationContext, bool) {
 		traceID:      frame.traceID,
 		invocationID: frame.invocationID,
 		parentID:     frame.parentID,
-		security:     frame.security,
 		deadline:     frame.deadline,
 	}, true
 }
@@ -117,45 +85,72 @@ func (c InvocationContext) InvocationID() audit.InvocationID { return c.invocati
 // first provider call in a request.
 func (c InvocationContext) ParentInvocationID() audit.InvocationID { return c.parentID }
 
-// SecurityContext returns the immutable provider-neutral Principal and
-// authentication or authorization references established at trusted ingress.
-func (c InvocationContext) SecurityContext() audit.SecurityContext { return c.security }
-
-// Deadline returns the effective governed invocation deadline.
+// Deadline returns the effective invocation deadline.
 func (c InvocationContext) Deadline() time.Time { return c.deadline }
 
 func enterInvocationContext(parent context.Context, invocationID audit.InvocationID, defaultTimeout time.Duration) (context.Context, func(), error) {
 	if parent == nil || !invocationID.Valid() || defaultTimeout <= 0 {
 		return nil, nil, ErrInvalidInvocationContext
 	}
-	frame, exists := runtimeFrameFrom(parent)
-	if !exists || invocationID == frame.invocationID || invocationID == frame.parentID {
-		return nil, nil, ErrInvalidInvocationContext
+
+	var (
+		requestID         audit.RequestID
+		traceID           audit.TraceID
+		parentID          audit.InvocationID
+		inheritedDeadline time.Time
+		authority         context.Context
+	)
+	stored := parent.Value(runtimeFrameKey{})
+	if stored != nil {
+		frame, valid := stored.(runtimeFrame)
+		if !valid || !frame.valid() || invocationID == frame.invocationID || invocationID == frame.parentID {
+			return nil, nil, ErrInvalidInvocationContext
+		}
+		requestID = frame.requestID
+		traceID = frame.traceID
+		parentID = frame.invocationID
+		inheritedDeadline = frame.deadline
+		authority = frame.authority
+	} else {
+		var err error
+		requestID, err = audit.NewRequestID()
+		if err != nil {
+			return nil, nil, fmt.Errorf("%w: generate request identity: %v", ErrInvalidInvocationContext, err)
+		}
+		for {
+			traceID, err = audit.NewTraceID()
+			if err != nil {
+				return nil, nil, fmt.Errorf("%w: generate trace identity: %v", ErrInvalidInvocationContext, err)
+			}
+			if traceID.String() != requestID.String() {
+				break
+			}
+		}
+		authority = parent
 	}
 
 	deadline := time.Now().Add(defaultTimeout)
 	if callerDeadline, hasDeadline := parent.Deadline(); hasDeadline && callerDeadline.Before(deadline) {
 		deadline = callerDeadline
 	}
-	if !frame.deadline.IsZero() && frame.deadline.Before(deadline) {
-		deadline = frame.deadline
+	if !inheritedDeadline.IsZero() && inheritedDeadline.Before(deadline) {
+		deadline = inheritedDeadline
 	}
 	next := runtimeFrame{
-		requestID:    frame.requestID,
-		traceID:      frame.traceID,
+		requestID:    requestID,
+		traceID:      traceID,
 		invocationID: invocationID,
-		parentID:     frame.invocationID,
-		security:     frame.security,
+		parentID:     parentID,
 		deadline:     deadline,
-		authority:    frame.authority,
+		authority:    authority,
 	}
-	if !next.validInvocation() {
+	if !next.valid() {
 		return nil, nil, ErrInvalidInvocationContext
 	}
 
 	callContext, cancel := context.WithDeadline(parent, deadline)
-	stopAuthority := context.AfterFunc(frame.authority, cancel)
-	if frame.authority.Err() != nil {
+	stopAuthority := context.AfterFunc(authority, cancel)
+	if authority.Err() != nil {
 		cancel()
 	}
 	entered := context.WithValue(callContext, runtimeFrameKey{}, next)
@@ -177,30 +172,13 @@ func runtimeFrameFrom(ctx context.Context) (runtimeFrame, bool) {
 	return frame, exists && frame.valid()
 }
 
-func (f runtimeFrame) validRoot() bool {
-	return f.valid() && !f.invocationID.Valid()
-}
-
-func (f runtimeFrame) validInvocation() bool {
-	return f.valid() && f.invocationID.Valid()
-}
-
 func (f runtimeFrame) valid() bool {
-	if !f.requestID.Valid() || !f.traceID.Valid() || !f.security.Valid() || f.authority == nil {
+	if !f.requestID.Valid() || !f.traceID.Valid() || !f.invocationID.Valid() ||
+		(f.parentID.Valid() && f.parentID == f.invocationID) || f.deadline.IsZero() || f.authority == nil {
 		return false
 	}
-	authorityDeadline, hasDeadline := f.authority.Deadline()
-	if !f.invocationID.Valid() {
-		if f.parentID.Valid() {
-			return false
-		}
-		if !hasDeadline {
-			return f.deadline.IsZero()
-		}
-		return !f.deadline.IsZero() && f.deadline.Equal(authorityDeadline)
-	}
-	if f.deadline.IsZero() || f.invocationID == f.parentID {
+	if authorityDeadline, hasDeadline := f.authority.Deadline(); hasDeadline && f.deadline.After(authorityDeadline) {
 		return false
 	}
-	return !hasDeadline || !f.deadline.After(authorityDeadline)
+	return true
 }
