@@ -63,6 +63,8 @@ The Kernel propagates ordinary Go context, cancellation, deadlines, trace correl
 
 Runtime configuration is validated and resolved through intrinsic Kernel facilities, then injected only into the owning plugin as typed data. One selected Plugin ID has one configuration object. Secret values never enter generated source, manifests, logs, traces, diagnostics, errors, or intrinsic Capability responses.
 
+The `configuration` package is the runtime boundary used by generated typed adapters. It accepts only validated environment-variable or clean absolute file references, resolves regular files and environment values within a mandatory byte bound, and returns an opaque `Secret`. Reference targets and resolved values are redacted for every formatting and structured-logging path; JSON, text, and YAML serialization fail closed. Resolution errors retain only the safe reference kind, failure class, and standard cancellation or deadline cause.
+
 ## Intrinsic Capabilities
 
 Reserved identities include:
