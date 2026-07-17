@@ -5,8 +5,6 @@ import (
 	"errors"
 	"testing"
 	"time"
-
-	"github.com/plystra/kernel/audit"
 )
 
 type runtimeContextValueKey struct{}
@@ -38,8 +36,8 @@ func TestEnterInvocationContextStartsIdentityNeutralRoot(t *testing.T) {
 	if !hasDeadline || deadline.Before(earliest) || deadline.After(latest) || !current.Deadline().Equal(deadline) {
 		t.Fatalf("root deadline = %v / %v, want between %v and %v", deadline, current.Deadline(), earliest, latest)
 	}
-	requestID, requestExists := RequestID(entered)
-	traceID, traceExists := TraceID(entered)
+	requestID, requestExists := RequestIDFromContext(entered)
+	traceID, traceExists := TraceIDFromContext(entered)
 	if !requestExists || !traceExists || requestID != current.RequestID() || traceID != current.TraceID() {
 		t.Fatalf("public IDs = %q/%t, %q/%t", requestID, requestExists, traceID, traceExists)
 	}
@@ -181,11 +179,11 @@ func TestInvocationContextAccessorsFailClosed(t *testing.T) {
 		context.WithValue(context.Background(), runtimeFrameKey{}, "forged"),
 	}
 	for _, ctx := range contexts {
-		if requestID, exists := RequestID(ctx); exists || requestID.Valid() {
-			t.Fatalf("RequestID(%#v) = %q, %t", ctx, requestID, exists)
+		if requestID, exists := RequestIDFromContext(ctx); exists || requestID.Valid() {
+			t.Fatalf("RequestIDFromContext(%#v) = %q, %t", ctx, requestID, exists)
 		}
-		if traceID, exists := TraceID(ctx); exists || traceID.Valid() {
-			t.Fatalf("TraceID(%#v) = %q, %t", ctx, traceID, exists)
+		if traceID, exists := TraceIDFromContext(ctx); exists || traceID.Valid() {
+			t.Fatalf("TraceIDFromContext(%#v) = %q, %t", ctx, traceID, exists)
 		}
 		if frame, exists := runtimeFrameFrom(ctx); exists || frame.valid() {
 			t.Fatalf("runtimeFrameFrom(%#v) = %#v, %t", ctx, frame, exists)
@@ -213,14 +211,14 @@ func TestEnterInvocationContextRejectsInvalidInputs(t *testing.T) {
 	}
 	defer cleanupInner()
 	corruptFrame, _ := runtimeFrameFrom(outer)
-	corruptFrame.requestID = audit.RequestID{}
+	corruptFrame.requestID = RequestID{}
 	corrupt := context.WithValue(outer, runtimeFrameKey{}, corruptFrame)
 	forged := context.WithValue(context.Background(), runtimeFrameKey{}, "forged")
 
 	for _, test := range []struct {
 		name       string
 		parent     context.Context
-		invocation audit.InvocationID
+		invocation InvocationID
 		timeout    time.Duration
 	}{
 		{name: "nil parent", invocation: outerID, timeout: time.Minute},
@@ -239,9 +237,9 @@ func TestEnterInvocationContextRejectsInvalidInputs(t *testing.T) {
 	}
 }
 
-func testInvocationID(t *testing.T, value string) audit.InvocationID {
+func testInvocationID(t *testing.T, value string) InvocationID {
 	t.Helper()
-	id, err := audit.ParseInvocationID(value)
+	id, err := ParseInvocationID(value)
 	if err != nil {
 		t.Fatalf("ParseInvocationID(%q): %v", value, err)
 	}

@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"sync"
 	"time"
-
-	"github.com/plystra/kernel/audit"
 )
 
 // ErrInvalidInvocationContext reports a nil, corrupt, or internally
@@ -19,10 +17,10 @@ type runtimeFrameKey struct{}
 // runtimeFrame is immutable Kernel-owned ancestry and deadline state. Ordinary
 // Go context remains the carrier; application identity is not part of the frame.
 type runtimeFrame struct {
-	requestID    audit.RequestID
-	traceID      audit.TraceID
-	invocationID audit.InvocationID
-	parentID     audit.InvocationID
+	requestID    RequestID
+	traceID      TraceID
+	invocationID InvocationID
+	parentID     InvocationID
 	deadline     time.Time
 	authority    context.Context
 }
@@ -30,29 +28,29 @@ type runtimeFrame struct {
 // InvocationContext is the read-only identity-neutral runtime frame visible to
 // a provider during one call.
 type InvocationContext struct {
-	requestID    audit.RequestID
-	traceID      audit.TraceID
-	invocationID audit.InvocationID
-	parentID     audit.InvocationID
+	requestID    RequestID
+	traceID      TraceID
+	invocationID InvocationID
+	parentID     InvocationID
 	deadline     time.Time
 }
 
-// RequestID returns the runtime-owned root request identity when ctx is an
-// active provider invocation context.
-func RequestID(ctx context.Context) (audit.RequestID, bool) {
+// RequestIDFromContext returns the runtime-owned root request identity when ctx
+// is an active provider invocation context.
+func RequestIDFromContext(ctx context.Context) (RequestID, bool) {
 	frame, exists := runtimeFrameFrom(ctx)
 	if !exists {
-		return audit.RequestID{}, false
+		return RequestID{}, false
 	}
 	return frame.requestID, true
 }
 
-// TraceID returns the runtime-owned invocation call-chain identity when ctx is
-// an active provider invocation context.
-func TraceID(ctx context.Context) (audit.TraceID, bool) {
+// TraceIDFromContext returns the runtime-owned invocation call-chain identity
+// when ctx is an active provider invocation context.
+func TraceIDFromContext(ctx context.Context) (TraceID, bool) {
 	frame, exists := runtimeFrameFrom(ctx)
 	if !exists {
-		return audit.TraceID{}, false
+		return TraceID{}, false
 	}
 	return frame.traceID, true
 }
@@ -73,30 +71,30 @@ func Current(ctx context.Context) (InvocationContext, bool) {
 }
 
 // RequestID returns the root request identity.
-func (c InvocationContext) RequestID() audit.RequestID { return c.requestID }
+func (c InvocationContext) RequestID() RequestID { return c.requestID }
 
 // TraceID returns the invocation call-chain identity.
-func (c InvocationContext) TraceID() audit.TraceID { return c.traceID }
+func (c InvocationContext) TraceID() TraceID { return c.traceID }
 
 // InvocationID returns the current invocation identity.
-func (c InvocationContext) InvocationID() audit.InvocationID { return c.invocationID }
+func (c InvocationContext) InvocationID() InvocationID { return c.invocationID }
 
 // ParentInvocationID returns the immediate parent invocation, or zero for the
 // first provider call in a request.
-func (c InvocationContext) ParentInvocationID() audit.InvocationID { return c.parentID }
+func (c InvocationContext) ParentInvocationID() InvocationID { return c.parentID }
 
 // Deadline returns the effective invocation deadline.
 func (c InvocationContext) Deadline() time.Time { return c.deadline }
 
-func enterInvocationContext(parent context.Context, invocationID audit.InvocationID, defaultTimeout time.Duration) (context.Context, func(), error) {
+func enterInvocationContext(parent context.Context, invocationID InvocationID, defaultTimeout time.Duration) (context.Context, func(), error) {
 	if parent == nil || !invocationID.Valid() || defaultTimeout <= 0 {
 		return nil, nil, ErrInvalidInvocationContext
 	}
 
 	var (
-		requestID         audit.RequestID
-		traceID           audit.TraceID
-		parentID          audit.InvocationID
+		requestID         RequestID
+		traceID           TraceID
+		parentID          InvocationID
 		inheritedDeadline time.Time
 		authority         context.Context
 	)
@@ -113,12 +111,12 @@ func enterInvocationContext(parent context.Context, invocationID audit.Invocatio
 		authority = frame.authority
 	} else {
 		var err error
-		requestID, err = audit.NewRequestID()
+		requestID, err = NewRequestID()
 		if err != nil {
 			return nil, nil, fmt.Errorf("%w: generate request identity: %v", ErrInvalidInvocationContext, err)
 		}
 		for {
-			traceID, err = audit.NewTraceID()
+			traceID, err = NewTraceID()
 			if err != nil {
 				return nil, nil, fmt.Errorf("%w: generate trace identity: %v", ErrInvalidInvocationContext, err)
 			}

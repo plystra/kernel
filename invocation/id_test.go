@@ -1,4 +1,4 @@
-package audit_test
+package invocation_test
 
 import (
 	"errors"
@@ -6,22 +6,22 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/plystra/kernel/audit"
+	"github.com/plystra/kernel/invocation"
 )
 
 func TestRuntimeIDsParseCanonicalValues(t *testing.T) {
 	t.Parallel()
 
 	const value = "0123456789abcdef0123456789abcdef"
-	invocationID, err := audit.ParseInvocationID(value)
+	invocationID, err := invocation.ParseInvocationID(value)
 	if err != nil || !invocationID.Valid() || invocationID.String() != value {
 		t.Fatalf("ParseInvocationID = %#v, %v", invocationID, err)
 	}
-	requestID, err := audit.ParseRequestID(value)
+	requestID, err := invocation.ParseRequestID(value)
 	if err != nil || !requestID.Valid() || requestID.String() != value {
 		t.Fatalf("ParseRequestID = %#v, %v", requestID, err)
 	}
-	traceID, err := audit.ParseTraceID(value)
+	traceID, err := invocation.ParseTraceID(value)
 	if err != nil || !traceID.Valid() || traceID.String() != value {
 		t.Fatalf("ParseTraceID = %#v, %v", traceID, err)
 	}
@@ -33,15 +33,15 @@ func TestRuntimeIDConstructorsGenerateDistinctCanonicalValues(t *testing.T) {
 	const generations = 64
 	seen := make(map[string]string, generations*3)
 	for index := range generations {
-		invocationID, err := audit.NewInvocationID()
+		invocationID, err := invocation.NewInvocationID()
 		if err != nil {
 			t.Fatalf("NewInvocationID: %v", err)
 		}
-		requestID, err := audit.NewRequestID()
+		requestID, err := invocation.NewRequestID()
 		if err != nil {
 			t.Fatalf("NewRequestID: %v", err)
 		}
-		traceID, err := audit.NewTraceID()
+		traceID, err := invocation.NewTraceID()
 		if err != nil {
 			t.Fatalf("NewTraceID: %v", err)
 		}
@@ -80,16 +80,16 @@ func TestRuntimeIDParsersRejectNonCanonicalValues(t *testing.T) {
 		"g123456789abcdef0123456789abcdef",
 		" 123456789abcdef0123456789abcdef",
 	} {
-		invocationID, invocationErr := audit.ParseInvocationID(value)
-		requestID, requestErr := audit.ParseRequestID(value)
-		traceID, traceErr := audit.ParseTraceID(value)
-		if !errors.Is(invocationErr, audit.ErrInvalidRuntimeID) || invocationID.Valid() || invocationID.String() != "" {
+		invocationID, invocationErr := invocation.ParseInvocationID(value)
+		requestID, requestErr := invocation.ParseRequestID(value)
+		traceID, traceErr := invocation.ParseTraceID(value)
+		if !errors.Is(invocationErr, invocation.ErrInvalidRuntimeID) || invocationID.Valid() || invocationID.String() != "" {
 			t.Fatalf("ParseInvocationID(%q) = %#v, %v", value, invocationID, invocationErr)
 		}
-		if !errors.Is(requestErr, audit.ErrInvalidRuntimeID) || requestID.Valid() || requestID.String() != "" {
+		if !errors.Is(requestErr, invocation.ErrInvalidRuntimeID) || requestID.Valid() || requestID.String() != "" {
 			t.Fatalf("ParseRequestID(%q) = %#v, %v", value, requestID, requestErr)
 		}
-		if !errors.Is(traceErr, audit.ErrInvalidRuntimeID) || traceID.Valid() || traceID.String() != "" {
+		if !errors.Is(traceErr, invocation.ErrInvalidRuntimeID) || traceID.Valid() || traceID.String() != "" {
 			t.Fatalf("ParseTraceID(%q) = %#v, %v", value, traceID, traceErr)
 		}
 	}
@@ -98,9 +98,9 @@ func TestRuntimeIDParsersRejectNonCanonicalValues(t *testing.T) {
 func TestZeroRuntimeIDsAreInvalid(t *testing.T) {
 	t.Parallel()
 
-	var invocationID audit.InvocationID
-	var requestID audit.RequestID
-	var traceID audit.TraceID
+	var invocationID invocation.InvocationID
+	var requestID invocation.RequestID
+	var traceID invocation.TraceID
 	if invocationID.Valid() || requestID.Valid() || traceID.Valid() {
 		t.Fatal("a zero runtime ID is valid")
 	}
@@ -115,14 +115,14 @@ func FuzzRuntimeIDParsing(f *testing.F) {
 	f.Add("bad")
 
 	f.Fuzz(func(t *testing.T, value string) {
-		invocationID, invocationErr := audit.ParseInvocationID(value)
-		requestID, requestErr := audit.ParseRequestID(value)
-		traceID, traceErr := audit.ParseTraceID(value)
+		invocationID, invocationErr := invocation.ParseInvocationID(value)
+		requestID, requestErr := invocation.ParseRequestID(value)
+		traceID, traceErr := invocation.ParseTraceID(value)
 		if (invocationErr == nil) != (requestErr == nil) || (requestErr == nil) != (traceErr == nil) {
 			t.Fatalf("ID parsers disagree: %v / %v / %v", invocationErr, requestErr, traceErr)
 		}
 		if invocationErr != nil {
-			if !errors.Is(invocationErr, audit.ErrInvalidRuntimeID) || !errors.Is(requestErr, audit.ErrInvalidRuntimeID) || !errors.Is(traceErr, audit.ErrInvalidRuntimeID) {
+			if !errors.Is(invocationErr, invocation.ErrInvalidRuntimeID) || !errors.Is(requestErr, invocation.ErrInvalidRuntimeID) || !errors.Is(traceErr, invocation.ErrInvalidRuntimeID) {
 				t.Fatalf("unexpected errors: %v / %v / %v", invocationErr, requestErr, traceErr)
 			}
 			if invocationID.Valid() || requestID.Valid() || traceID.Valid() {

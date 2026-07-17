@@ -8,7 +8,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/plystra/kernel/audit"
 	"github.com/plystra/kernel/capability"
 	"github.com/plystra/kernel/plugin"
 )
@@ -355,18 +354,18 @@ func testBinding(t *testing.T, identifier string, providerID plugin.ID) Binding 
 	return binding
 }
 
-func mustModuleBuild(t *testing.T, modulePath, moduleVersion, buildIdentity string) audit.ModuleBuild {
+func mustModuleBuild(t *testing.T, modulePath, moduleVersion, buildIdentity string) ModuleBuild {
 	t.Helper()
-	build, err := audit.NewModuleBuild(modulePath, moduleVersion, buildIdentity)
+	build, err := NewModuleBuild(modulePath, moduleVersion, buildIdentity)
 	if err != nil {
 		t.Fatalf("NewModuleBuild: %v", err)
 	}
 	return build
 }
 
-func mustModuleBuildBenchmark(b *testing.B, modulePath, moduleVersion, buildIdentity string) audit.ModuleBuild {
+func mustModuleBuildBenchmark(b *testing.B, modulePath, moduleVersion, buildIdentity string) ModuleBuild {
 	b.Helper()
-	build, err := audit.NewModuleBuild(modulePath, moduleVersion, buildIdentity)
+	build, err := NewModuleBuild(modulePath, moduleVersion, buildIdentity)
 	if err != nil {
 		b.Fatalf("NewModuleBuild: %v", err)
 	}

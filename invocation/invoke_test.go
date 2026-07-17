@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/plystra/kernel/audit"
 	"github.com/plystra/kernel/capability"
 	"github.com/plystra/kernel/plugin"
 )
@@ -51,7 +50,7 @@ func TestHandleInvokeRunsCompleteRawDispatchPath(t *testing.T) {
 		!providerContext.InvocationID().Valid() || providerContext.ParentInvocationID().Valid() {
 		t.Fatalf("provider context = %#v", providerContext)
 	}
-	if _, exists := RequestID(harness.root); exists {
+	if _, exists := RequestIDFromContext(harness.root); exists {
 		t.Fatal("Invoke mutated its caller context")
 	}
 }
@@ -224,9 +223,9 @@ func TestHandleInvokeIsSafeForConcurrentRootCalls(t *testing.T) {
 	group.Wait()
 
 	close(contexts)
-	requests := make(map[audit.RequestID]struct{}, calls)
-	traces := make(map[audit.TraceID]struct{}, calls)
-	invocations := make(map[audit.InvocationID]struct{}, calls)
+	requests := make(map[RequestID]struct{}, calls)
+	traces := make(map[TraceID]struct{}, calls)
+	invocations := make(map[InvocationID]struct{}, calls)
 	for current := range contexts {
 		if !current.RequestID().Valid() || !current.TraceID().Valid() || !current.InvocationID().Valid() || current.ParentInvocationID().Valid() {
 			t.Fatalf("concurrent context = %#v", current)
@@ -243,45 +242,45 @@ func TestHandleInvokeIsSafeForConcurrentRootCalls(t *testing.T) {
 func TestHandleInvokeNormalizesProviderFailuresAndPanics(t *testing.T) {
 	t.Parallel()
 
-	safe, err := NewError(audit.ErrorInvalidArgument, "contract.invalid_request")
+	safe, err := NewError(ErrorInvalidArgument, "contract.invalid_request")
 	if err != nil {
 		t.Fatalf("NewError: %v", err)
 	}
-	unknown, err := NewError(audit.ErrorResultUnknown, "transport.delivery_unknown")
+	unknown, err := NewError(ErrorResultUnknown, "transport.delivery_unknown")
 	if err != nil {
 		t.Fatalf("NewError(result unknown): %v", err)
 	}
 	for _, test := range []struct {
 		name       string
 		handler    capability.Handler[invokeRequest, invokeResponse]
-		code       audit.ErrorCode
+		code       ErrorCode
 		detail     string
 		wantShared *Error
 	}{
 		{name: "safe error", handler: func(context.Context, invokeRequest) (invokeResponse, error) {
 			return invokeResponse{Value: "must not escape"}, safe
-		}, code: audit.ErrorInvalidArgument, detail: "contract.invalid_request", wantShared: safe},
+		}, code: ErrorInvalidArgument, detail: "contract.invalid_request", wantShared: safe},
 		{name: "wrapped safe error", handler: func(context.Context, invokeRequest) (invokeResponse, error) {
 			return invokeResponse{}, fmt.Errorf("provider password=secret: %w", safe)
-		}, code: audit.ErrorInvalidArgument, detail: "contract.invalid_request", wantShared: safe},
+		}, code: ErrorInvalidArgument, detail: "contract.invalid_request", wantShared: safe},
 		{name: "result unknown", handler: func(context.Context, invokeRequest) (invokeResponse, error) {
 			return invokeResponse{}, unknown
-		}, code: audit.ErrorResultUnknown, detail: "transport.delivery_unknown", wantShared: unknown},
+		}, code: ErrorResultUnknown, detail: "transport.delivery_unknown", wantShared: unknown},
 		{name: "raw sensitive error", handler: func(context.Context, invokeRequest) (invokeResponse, error) {
 			return invokeResponse{}, errors.New("provider password=secret")
-		}, code: audit.ErrorInternal, detail: detailProviderFailed},
+		}, code: ErrorInternal, detail: detailProviderFailed},
 		{name: "normalizer panic", handler: func(context.Context, invokeRequest) (invokeResponse, error) {
 			return invokeResponse{}, panickingProviderError{}
-		}, code: audit.ErrorInternal, detail: detailProviderFailed},
+		}, code: ErrorInternal, detail: detailProviderFailed},
 		{name: "panic", handler: func(context.Context, invokeRequest) (invokeResponse, error) {
 			panic("provider token=secret")
-		}, code: audit.ErrorInternal, detail: detailProviderPanic},
+		}, code: ErrorInternal, detail: detailProviderPanic},
 		{name: "deadline error", handler: func(context.Context, invokeRequest) (invokeResponse, error) {
 			return invokeResponse{}, context.DeadlineExceeded
-		}, code: audit.ErrorTimeout, detail: detailDeadlineExceeded},
+		}, code: ErrorTimeout, detail: detailDeadlineExceeded},
 		{name: "cancelled error", handler: func(context.Context, invokeRequest) (invokeResponse, error) {
 			return invokeResponse{}, context.Canceled
-		}, code: audit.ErrorCancelled, detail: detailInvocationCancelled},
+		}, code: ErrorCancelled, detail: detailInvocationCancelled},
 	} {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
@@ -312,7 +311,7 @@ func TestHandleInvokeAppliesDeadlineToProvider(t *testing.T) {
 	}, invokeHarnessOptions{defaultTimeout: 15 * time.Millisecond})
 
 	response, err := harness.handle.Invoke(harness.root, invokeRequest{})
-	requireInvocationError(t, err, audit.ErrorTimeout, detailDeadlineExceeded)
+	requireInvocationError(t, err, ErrorTimeout, detailDeadlineExceeded)
 	if !errors.Is(err, context.DeadlineExceeded) || response != (invokeResponse{}) || providerCalls.Load() != 1 {
 		t.Fatalf("deadline Invoke = %#v, %v, provider calls %d", response, err, providerCalls.Load())
 	}
@@ -330,7 +329,7 @@ func TestHandleInvokePropagatesCancellation(t *testing.T) {
 	}, invokeHarnessOptions{parent: parent})
 
 	response, err := harness.handle.Invoke(harness.root, invokeRequest{})
-	requireInvocationError(t, err, audit.ErrorCancelled, detailInvocationCancelled)
+	requireInvocationError(t, err, ErrorCancelled, detailInvocationCancelled)
 	if !errors.Is(err, context.Canceled) || response != (invokeResponse{}) {
 		t.Fatalf("cancelled Invoke = %#v, %v", response, err)
 	}
@@ -349,7 +348,7 @@ func TestHandleInvokeRejectsPreCancelledContext(t *testing.T) {
 	cancel()
 
 	response, err := harness.handle.Invoke(harness.root, invokeRequest{})
-	requireInvocationError(t, err, audit.ErrorCancelled, detailInvocationCancelled)
+	requireInvocationError(t, err, ErrorCancelled, detailInvocationCancelled)
 	if !errors.Is(err, context.Canceled) || response != (invokeResponse{}) || providerCalls.Load() != 0 {
 		t.Fatalf("pre-cancelled Invoke = %#v, %v, provider calls %d", response, err, providerCalls.Load())
 	}
@@ -366,7 +365,7 @@ func TestHandleInvokeRechecksCancellationAfterFastProviderReturn(t *testing.T) {
 	}, invokeHarnessOptions{parent: parent})
 
 	response, err := harness.handle.Invoke(harness.root, invokeRequest{})
-	requireInvocationError(t, err, audit.ErrorCancelled, detailInvocationCancelled)
+	requireInvocationError(t, err, ErrorCancelled, detailInvocationCancelled)
 	if !errors.Is(err, context.Canceled) || response != (invokeResponse{}) {
 		t.Fatalf("fast cancellation Invoke = %#v, %v", response, err)
 	}
@@ -384,7 +383,7 @@ func TestHandleInvokeClassifiesCallerDeadline(t *testing.T) {
 	}, invokeHarnessOptions{parent: parent, defaultTimeout: time.Second})
 
 	response, err := harness.handle.Invoke(harness.root, invokeRequest{})
-	requireInvocationError(t, err, audit.ErrorTimeout, detailDeadlineExceeded)
+	requireInvocationError(t, err, ErrorTimeout, detailDeadlineExceeded)
 	if !errors.Is(err, context.DeadlineExceeded) || response != (invokeResponse{}) {
 		t.Fatalf("authority deadline Invoke = %#v, %v", response, err)
 	}
@@ -405,7 +404,7 @@ func TestHandleInvokeRejectsContractMismatchWithoutCallingProvider(t *testing.T)
 		t.Fatalf("NewHandle: %v", err)
 	}
 	response, err := handle.Invoke(harness.root, invokeRequest{})
-	requireInvocationError(t, err, audit.ErrorInternal, detailContractMismatch)
+	requireInvocationError(t, err, ErrorInternal, detailContractMismatch)
 	if response != (invokeResponse{}) || providerCalls.Load() != 0 {
 		t.Fatalf("contract mismatch = %#v, %v, provider calls %d", response, err, providerCalls.Load())
 	}
@@ -423,21 +422,21 @@ func TestHandleInvokeRejectsPreEntryFailuresWithoutProviderExecution(t *testing.
 
 	var zero Handle[invokeRequest, invokeResponse]
 	_, err := zero.Invoke(context.Background(), invokeRequest{})
-	requireInvocationError(t, err, audit.ErrorInternal, detailInvalidHandle)
+	requireInvocationError(t, err, ErrorInternal, detailInvalidHandle)
 	var nilContext context.Context
 	_, err = harness.handle.Invoke(nilContext, invokeRequest{})
-	requireInvocationError(t, err, audit.ErrorInvalidArgument, detailContextRequired)
+	requireInvocationError(t, err, ErrorInvalidArgument, detailContextRequired)
 	unavailable, err := NewHandle(harness.dispatcher, contract, false)
 	if err != nil {
 		t.Fatalf("NewHandle(unavailable): %v", err)
 	}
 	_, err = unavailable.Invoke(harness.root, invokeRequest{})
-	requireInvocationError(t, err, audit.ErrorUnavailable, detailCapabilityUnavailable)
+	requireInvocationError(t, err, ErrorUnavailable, detailCapabilityUnavailable)
 
 	unpublished := newInvokeDispatcher(t, time.Second)
 	unpublishedHandle, unpublishedRoot := newInvokeHandleAndContext(t, unpublished, contract)
 	_, err = unpublishedHandle.Invoke(unpublishedRoot, invokeRequest{})
-	requireInvocationError(t, err, audit.ErrorUnavailable, detailDispatcherNotReady)
+	requireInvocationError(t, err, ErrorUnavailable, detailDispatcherNotReady)
 
 	empty := newInvokeDispatcher(t, time.Second)
 	emptyCatalog, err := NewCatalog(nil)
@@ -449,7 +448,7 @@ func TestHandleInvokeRejectsPreEntryFailuresWithoutProviderExecution(t *testing.
 	}
 	emptyHandle, emptyRoot := newInvokeHandleAndContext(t, empty, contract)
 	_, err = emptyHandle.Invoke(emptyRoot, invokeRequest{})
-	requireInvocationError(t, err, audit.ErrorUnavailable, detailCapabilityUnavailable)
+	requireInvocationError(t, err, ErrorUnavailable, detailCapabilityUnavailable)
 
 	if providerCalls.Load() != 0 {
 		t.Fatalf("pre-entry work reached provider: %d calls", providerCalls.Load())
@@ -564,7 +563,7 @@ func newInvokeBinding(
 	return binding
 }
 
-func requireInvocationError(t *testing.T, err error, code audit.ErrorCode, detail string) *Error {
+func requireInvocationError(t *testing.T, err error, code ErrorCode, detail string) *Error {
 	t.Helper()
 	var boundary *Error
 	if !errors.As(err, &boundary) || !boundary.valid() || boundary.Code() != code || boundary.DetailCode() != detail {

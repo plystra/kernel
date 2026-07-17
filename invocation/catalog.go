@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/plystra/kernel/audit"
 	"github.com/plystra/kernel/capability"
 	"github.com/plystra/kernel/plugin"
 )
@@ -48,7 +47,7 @@ func (k ProviderKind) Valid() bool {
 type BindingOptions struct {
 	ProviderKind  ProviderKind
 	ProviderID    plugin.ID
-	ProviderBuild audit.ModuleBuild
+	ProviderBuild ModuleBuild
 	SchemaDigest  [sha256.Size]byte
 }
 
@@ -57,7 +56,7 @@ type BindingOptions struct {
 type Binding struct {
 	providerKind  ProviderKind
 	providerID    plugin.ID
-	providerBuild audit.ModuleBuild
+	providerBuild ModuleBuild
 	schemaDigest  [sha256.Size]byte
 	endpoint      Endpoint
 }
@@ -114,9 +113,9 @@ func (b Binding) ProviderID() plugin.ID {
 }
 
 // ProviderBuild returns the selected implementation's Go module provenance.
-func (b Binding) ProviderBuild() audit.ModuleBuild {
+func (b Binding) ProviderBuild() ModuleBuild {
 	if !b.valid() {
-		return audit.ModuleBuild{}
+		return ModuleBuild{}
 	}
 	return b.providerBuild
 }

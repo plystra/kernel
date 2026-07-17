@@ -6,25 +6,23 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-
-	"github.com/plystra/kernel/audit"
 )
 
 func TestNewErrorSupportsEveryStandardClass(t *testing.T) {
 	t.Parallel()
 
-	for _, code := range []audit.ErrorCode{
-		audit.ErrorInvalidArgument,
-		audit.ErrorNotFound,
-		audit.ErrorConflict,
-		audit.ErrorDenied,
-		audit.ErrorUnauthenticated,
-		audit.ErrorUnavailable,
-		audit.ErrorTimeout,
-		audit.ErrorCancelled,
-		audit.ErrorResultUnknown,
-		audit.ErrorInternal,
-		audit.ErrorVersionIncompatible,
+	for _, code := range []ErrorCode{
+		ErrorInvalidArgument,
+		ErrorNotFound,
+		ErrorConflict,
+		ErrorDenied,
+		ErrorUnauthenticated,
+		ErrorUnavailable,
+		ErrorTimeout,
+		ErrorCancelled,
+		ErrorResultUnknown,
+		ErrorInternal,
+		ErrorVersionIncompatible,
 	} {
 		boundary, err := NewError(code, "contract.failure")
 		if err != nil {
@@ -40,24 +38,24 @@ func TestNewErrorSupportsEveryStandardClass(t *testing.T) {
 func TestNewErrorAllowsEmptyDetailExceptForDenial(t *testing.T) {
 	t.Parallel()
 
-	for _, code := range []audit.ErrorCode{
-		audit.ErrorInvalidArgument,
-		audit.ErrorNotFound,
-		audit.ErrorConflict,
-		audit.ErrorUnauthenticated,
-		audit.ErrorUnavailable,
-		audit.ErrorTimeout,
-		audit.ErrorCancelled,
-		audit.ErrorResultUnknown,
-		audit.ErrorInternal,
-		audit.ErrorVersionIncompatible,
+	for _, code := range []ErrorCode{
+		ErrorInvalidArgument,
+		ErrorNotFound,
+		ErrorConflict,
+		ErrorUnauthenticated,
+		ErrorUnavailable,
+		ErrorTimeout,
+		ErrorCancelled,
+		ErrorResultUnknown,
+		ErrorInternal,
+		ErrorVersionIncompatible,
 	} {
 		boundary, err := NewError(code, "")
 		if err != nil || !boundary.valid() || boundary.DetailCode() != "" {
 			t.Fatalf("NewError(%q, empty) = %#v, %v", code, boundary, err)
 		}
 	}
-	if boundary, err := NewError(audit.ErrorDenied, ""); !errors.Is(err, ErrInvalidError) || boundary != nil {
+	if boundary, err := NewError(ErrorDenied, ""); !errors.Is(err, ErrInvalidError) || boundary != nil {
 		t.Fatalf("empty denial = %#v, %v", boundary, err)
 	}
 }
@@ -70,9 +68,9 @@ func TestNewErrorAcceptsCanonicalDetailCodes(t *testing.T) {
 		"invalid_recipient",
 		"authorization.policy_denied",
 		"contract.v2_error",
-		strings.Repeat("a", audit.MaximumDetailCodeSize),
+		strings.Repeat("a", MaximumDetailCodeSize),
 	} {
-		boundary, err := NewError(audit.ErrorInternal, detail)
+		boundary, err := NewError(ErrorInternal, detail)
 		if err != nil || !boundary.valid() || boundary.DetailCode() != detail {
 			t.Fatalf("NewError(detail %q) = %#v, %v", detail, boundary, err)
 		}
@@ -83,21 +81,21 @@ func TestNewErrorRejectsInvalidCodesAndDetails(t *testing.T) {
 	t.Parallel()
 
 	for _, test := range []struct {
-		code   audit.ErrorCode
+		code   ErrorCode
 		detail string
 	}{
 		{code: ""},
 		{code: "unknown"},
-		{code: audit.ErrorInternal, detail: "Uppercase"},
-		{code: audit.ErrorInternal, detail: "bad-code"},
-		{code: audit.ErrorInternal, detail: "bad__code"},
-		{code: audit.ErrorInternal, detail: "bad_code_"},
-		{code: audit.ErrorInternal, detail: ".bad"},
-		{code: audit.ErrorInternal, detail: "bad."},
-		{code: audit.ErrorInternal, detail: "bad..code"},
-		{code: audit.ErrorInternal, detail: "bad code"},
-		{code: audit.ErrorInternal, detail: "\u79d8\u5bc6"},
-		{code: audit.ErrorInternal, detail: strings.Repeat("a", audit.MaximumDetailCodeSize+1)},
+		{code: ErrorInternal, detail: "Uppercase"},
+		{code: ErrorInternal, detail: "bad-code"},
+		{code: ErrorInternal, detail: "bad__code"},
+		{code: ErrorInternal, detail: "bad_code_"},
+		{code: ErrorInternal, detail: ".bad"},
+		{code: ErrorInternal, detail: "bad."},
+		{code: ErrorInternal, detail: "bad..code"},
+		{code: ErrorInternal, detail: "bad code"},
+		{code: ErrorInternal, detail: "\u79d8\u5bc6"},
+		{code: ErrorInternal, detail: strings.Repeat("a", MaximumDetailCodeSize+1)},
 	} {
 		boundary, err := NewError(test.code, test.detail)
 		if !errors.Is(err, ErrInvalidError) || boundary != nil {
@@ -110,11 +108,11 @@ func TestErrorPreservesOnlySafeContextIdentities(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		code   audit.ErrorCode
+		code   ErrorCode
 		target error
 	}{
-		{audit.ErrorTimeout, context.DeadlineExceeded},
-		{audit.ErrorCancelled, context.Canceled},
+		{ErrorTimeout, context.DeadlineExceeded},
+		{ErrorCancelled, context.Canceled},
 	}
 	for _, test := range tests {
 		boundary, err := NewError(test.code, "runtime.limit")
@@ -132,7 +130,7 @@ func TestErrorPreservesOnlySafeContextIdentities(t *testing.T) {
 			t.Fatalf("NewError(%q) matched an unrelated error", test.code)
 		}
 	}
-	internal, err := NewError(audit.ErrorInternal, "")
+	internal, err := NewError(ErrorInternal, "")
 	if err != nil || errors.Is(internal, context.Canceled) || errors.Is(internal, context.DeadlineExceeded) {
 		t.Fatalf("internal error exposes a context identity: %#v, %v", internal, err)
 	}
@@ -147,7 +145,7 @@ func TestErrorExposesNoMutableOrFreeFormState(t *testing.T) {
 			t.Fatalf("Error field %q exposes mutable state", field.Name)
 		}
 	}
-	boundary, err := NewError(audit.ErrorConflict, "document.version_conflict")
+	boundary, err := NewError(ErrorConflict, "document.version_conflict")
 	if err != nil {
 		t.Fatalf("NewError: %v", err)
 	}
@@ -176,7 +174,7 @@ func FuzzNewError(f *testing.F) {
 	f.Add("unknown", "private details")
 
 	f.Fuzz(func(t *testing.T, code, detail string) {
-		boundary, err := NewError(audit.ErrorCode(code), detail)
+		boundary, err := NewError(ErrorCode(code), detail)
 		if err != nil {
 			if !errors.Is(err, ErrInvalidError) || boundary != nil {
 				t.Fatalf("NewError(%q, %q) = %#v, %v", code, detail, boundary, err)

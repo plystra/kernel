@@ -3,8 +3,6 @@ package invocation
 import (
 	"context"
 	"errors"
-
-	"github.com/plystra/kernel/audit"
 )
 
 const (
@@ -27,31 +25,31 @@ const (
 func (h Handle[Request, Response]) Invoke(ctx context.Context, request Request) (Response, error) {
 	var zero Response
 	if !h.valid() {
-		return zero, newInvocationBoundary(audit.ErrorInternal, detailInvalidHandle)
+		return zero, newInvocationBoundary(ErrorInternal, detailInvalidHandle)
 	}
 	if ctx == nil {
-		return zero, newInvocationBoundary(audit.ErrorInvalidArgument, detailContextRequired)
+		return zero, newInvocationBoundary(ErrorInvalidArgument, detailContextRequired)
 	}
 	if !h.available {
-		return zero, newInvocationBoundary(audit.ErrorUnavailable, detailCapabilityUnavailable)
+		return zero, newInvocationBoundary(ErrorUnavailable, detailCapabilityUnavailable)
 	}
 
 	state, err := h.dispatcher.snapshot()
 	if err != nil {
-		return zero, newInvocationBoundary(audit.ErrorUnavailable, detailDispatcherNotReady)
+		return zero, newInvocationBoundary(ErrorUnavailable, detailDispatcherNotReady)
 	}
 	binding, exists := state.entries[h.definition.Identifier()]
 	if !exists {
-		return zero, newInvocationBoundary(audit.ErrorUnavailable, detailCapabilityUnavailable)
+		return zero, newInvocationBoundary(ErrorUnavailable, detailCapabilityUnavailable)
 	}
 
-	invocationID, err := audit.NewInvocationID()
+	invocationID, err := NewInvocationID()
 	if err != nil {
-		return zero, newInvocationBoundary(audit.ErrorInternal, detailInvocationIDFailed)
+		return zero, newInvocationBoundary(ErrorInternal, detailInvocationIDFailed)
 	}
 	callContext, cleanup, err := enterInvocationContext(ctx, invocationID, h.dispatcher.defaultTimeout)
 	if err != nil {
-		return zero, newInvocationBoundary(audit.ErrorInvalidArgument, detailContextRequired)
+		return zero, newInvocationBoundary(ErrorInvalidArgument, detailContextRequired)
 	}
 	defer cleanup()
 
@@ -73,7 +71,7 @@ func invokeBounded[Request, Response any](
 		return zero, boundary
 	}
 	if binding.endpoint.definition != handle.definition {
-		return zero, newInvocationBoundary(audit.ErrorInternal, detailContractMismatch)
+		return zero, newInvocationBoundary(ErrorInternal, detailContractMismatch)
 	}
 
 	response, err := invokeEndpoint[Request, Response](ctx, binding.endpoint, handle.definition, request)
@@ -88,7 +86,7 @@ func invokeBounded[Request, Response any](
 
 func invocationContextError(ctx context.Context) *Error {
 	if ctx == nil {
-		return newInvocationBoundary(audit.ErrorInvalidArgument, detailContextRequired)
+		return newInvocationBoundary(ErrorInvalidArgument, detailContextRequired)
 	}
 	if frame, exists := runtimeFrameFrom(ctx); exists {
 		if boundary := boundaryForContextError(frame.authority.Err()); boundary != nil {
@@ -101,19 +99,19 @@ func invocationContextError(ctx context.Context) *Error {
 func boundaryForContextError(err error) *Error {
 	switch err {
 	case context.DeadlineExceeded:
-		return newInvocationBoundary(audit.ErrorTimeout, detailDeadlineExceeded)
+		return newInvocationBoundary(ErrorTimeout, detailDeadlineExceeded)
 	case context.Canceled:
-		return newInvocationBoundary(audit.ErrorCancelled, detailInvocationCancelled)
+		return newInvocationBoundary(ErrorCancelled, detailInvocationCancelled)
 	default:
 		return nil
 	}
 }
 
 func normalizeProviderError(providerError error) (boundary *Error) {
-	boundary = newInvocationBoundary(audit.ErrorInternal, detailProviderFailed)
+	boundary = newInvocationBoundary(ErrorInternal, detailProviderFailed)
 	defer func() {
 		if recover() != nil {
-			boundary = newInvocationBoundary(audit.ErrorInternal, detailProviderFailed)
+			boundary = newInvocationBoundary(ErrorInternal, detailProviderFailed)
 		}
 	}()
 	var safe *Error
@@ -122,24 +120,24 @@ func normalizeProviderError(providerError error) (boundary *Error) {
 	}
 	switch {
 	case errors.Is(providerError, context.DeadlineExceeded):
-		return newInvocationBoundary(audit.ErrorTimeout, detailDeadlineExceeded)
+		return newInvocationBoundary(ErrorTimeout, detailDeadlineExceeded)
 	case errors.Is(providerError, context.Canceled):
-		return newInvocationBoundary(audit.ErrorCancelled, detailInvocationCancelled)
+		return newInvocationBoundary(ErrorCancelled, detailInvocationCancelled)
 	case errors.Is(providerError, ErrProviderPanic):
-		return newInvocationBoundary(audit.ErrorInternal, detailProviderPanic)
+		return newInvocationBoundary(ErrorInternal, detailProviderPanic)
 	case errors.Is(providerError, ErrContractMismatch):
-		return newInvocationBoundary(audit.ErrorInternal, detailContractMismatch)
+		return newInvocationBoundary(ErrorInternal, detailContractMismatch)
 	case errors.Is(providerError, ErrInvalidEndpoint):
-		return newInvocationBoundary(audit.ErrorInternal, detailInvalidEndpoint)
+		return newInvocationBoundary(ErrorInternal, detailInvalidEndpoint)
 	default:
 		return boundary
 	}
 }
 
-func newInvocationBoundary(code audit.ErrorCode, detailCode string) *Error {
+func newInvocationBoundary(code ErrorCode, detailCode string) *Error {
 	boundary, err := NewError(code, detailCode)
 	if err == nil {
 		return boundary
 	}
-	return &Error{code: audit.ErrorInternal, detailCode: detailErrorNormalization}
+	return &Error{code: ErrorInternal, detailCode: detailErrorNormalization}
 }
