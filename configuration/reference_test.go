@@ -56,9 +56,32 @@ func TestFileReferencesRequireCleanAbsolutePaths(t *testing.T) {
 		t.Fatalf("NewFileReference = %#v, %v", reference, err)
 	}
 	assertReferenceRedacted(t, reference, path)
+	for _, portable := range []string{
+		"/run/secrets/smtp-password",
+		`C:\run\secrets\smtp-password`,
+		`\\server\share\smtp-password`,
+	} {
+		reference, err := configuration.NewFileReference(portable)
+		if err != nil || !reference.Valid() || reference.Kind() != configuration.ReferenceFile {
+			t.Fatalf("portable NewFileReference(%q) = %#v, %v", portable, reference, err)
+		}
+		assertReferenceRedacted(t, reference, portable)
+	}
 
 	dirty := filepath.Join(filepath.Dir(path), "nested") + string(filepath.Separator) + ".." + string(filepath.Separator) + filepath.Base(path)
-	for _, invalid := range []string{"", "relative/secret", dirty, path + "\x00suffix", path + "\nsuffix", string([]byte{0xff})} {
+	for _, invalid := range []string{
+		"",
+		"relative/secret",
+		dirty,
+		`C:relative\secret`,
+		`C:\run\secrets\..\smtp-password`,
+		`C:\run\secrets\`,
+		`\\server`,
+		`\\?\C:\run\secrets\smtp-password`,
+		path + "\x00suffix",
+		path + "\nsuffix",
+		string([]byte{0xff}),
+	} {
 		reference, err := configuration.NewFileReference(invalid)
 		if !errors.Is(err, configuration.ErrInvalidReference) || reference.Valid() || reference.Kind().Valid() {
 			t.Fatalf("invalid file reference %q = %#v, %v", invalid, reference, err)

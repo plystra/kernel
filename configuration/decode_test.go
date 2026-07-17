@@ -195,6 +195,31 @@ func TestDecodeResolvesFileSecretExactly(t *testing.T) {
 	}
 }
 
+func TestValidateChecksValuesWithoutResolvingSecretSources(t *testing.T) {
+	const missingEnvironment = "PLYSTRA_CONFIGURATION_VALIDATE_MISSING"
+	_ = os.Unsetenv(missingEnvironment)
+	t.Cleanup(func() { _ = os.Unsetenv(missingEnvironment) })
+	missingFile := filepath.Join(t.TempDir(), "missing-secret")
+	schema := configurationSchema(t, `
+count: {type: integer, required: true}
+environment_token: {type: secret, required: true}
+file_token: {type: secret, required: true}
+mode: {type: string, enum: [one, two], default: one}
+`)
+	input := fmt.Sprintf("count: 2\nenvironment_token: {env: %s}\nfile_token: {file: %q}\n", missingEnvironment, missingFile)
+	if err := configuration.Validate(schema, []byte(input)); err != nil {
+		t.Fatalf("Validate unresolved values: %v", err)
+	}
+	for _, invalid := range []string{
+		fmt.Sprintf("count: wrong\nenvironment_token: {env: %s}\nfile_token: {file: %q}\n", missingEnvironment, missingFile),
+		fmt.Sprintf("count: 2\nenvironment_token: {env: BAD=TARGET}\nfile_token: {file: %q}\n", missingFile),
+	} {
+		if err := configuration.Validate(schema, []byte(invalid)); !errors.Is(err, configuration.ErrInvalidValues) || !errors.Is(err, configuration.ErrInvalidValue) {
+			t.Fatalf("Validate invalid values = %v", err)
+		}
+	}
+}
+
 func TestDecodeRejectsInvalidValuesWithSafeTypedErrors(t *testing.T) {
 	t.Parallel()
 
@@ -419,6 +444,10 @@ count: {type: integer}
 name: {type: string}
 token: {type: secret}
 `)
+		validationErr := configuration.Validate(schema, []byte(input))
+		if validationErr != nil && !errors.Is(validationErr, configuration.ErrInvalidValues) {
+			t.Fatalf("Validate returned unexpected error: %v", validationErr)
+		}
 		values, err := configuration.Decode(context.Background(), configurationResolver(t, 64), schema, []byte(input))
 		if err != nil {
 			if !errors.Is(err, configuration.ErrInvalidValues) {
@@ -431,6 +460,9 @@ token: {type: secret}
 		}
 		if !values.Valid() {
 			t.Fatal("Decode succeeded with invalid Values")
+		}
+		if validationErr != nil {
+			t.Fatalf("Decode accepted values rejected by Validate: %v", validationErr)
 		}
 	})
 }

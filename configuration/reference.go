@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path"
 	"path/filepath"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -148,7 +150,7 @@ func validEnvironmentName(name string) bool {
 }
 
 func validFilePath(path string) bool {
-	if len(path) == 0 || len(path) > maximumFilePathBytes || !utf8.ValidString(path) || !filepath.IsAbs(path) || filepath.Clean(path) != path {
+	if len(path) == 0 || len(path) > maximumFilePathBytes || !utf8.ValidString(path) {
 		return false
 	}
 	for _, character := range path {
@@ -156,5 +158,43 @@ func validFilePath(path string) bool {
 			return false
 		}
 	}
+	if (len(path) >= 2 && path[1] == ':') || strings.HasPrefix(path, "\\\\") {
+		return validWindowsAbsolutePath(path)
+	}
+	return (filepath.IsAbs(path) && filepath.Clean(path) == path) || validSlashAbsolutePath(path)
+}
+
+func validSlashAbsolutePath(value string) bool {
+	return strings.HasPrefix(value, "/") && path.IsAbs(value) && path.Clean(value) == value
+}
+
+func validWindowsAbsolutePath(value string) bool {
+	if strings.ContainsRune(value, '/') {
+		return false
+	}
+	components := []string(nil)
+	switch {
+	case len(value) >= 3 && asciiLetter(value[0]) && value[1] == ':' && value[2] == '\\':
+		if len(value) == 3 {
+			return true
+		}
+		components = strings.Split(value[3:], "\\")
+	case strings.HasPrefix(value, "\\\\") && !strings.HasPrefix(value, "\\\\?\\") && !strings.HasPrefix(value, "\\\\.\\"):
+		components = strings.Split(value[2:], "\\")
+		if len(components) < 2 {
+			return false
+		}
+	default:
+		return false
+	}
+	for _, component := range components {
+		if component == "" || component == "." || component == ".." || strings.ContainsAny(component, `<>:"|?*`) || strings.HasSuffix(component, " ") || strings.HasSuffix(component, ".") {
+			return false
+		}
+	}
 	return true
+}
+
+func asciiLetter(value byte) bool {
+	return value >= 'A' && value <= 'Z' || value >= 'a' && value <= 'z'
 }

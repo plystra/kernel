@@ -49,63 +49,9 @@ func Decode(ctx context.Context, resolver *Resolver, schema manifest.Config, dat
 	if err := ctx.Err(); err != nil {
 		return Values{}, newValuesError("", nil, err)
 	}
-	root, err := decodeValuesDocument(data)
+	resolved, pending, err := decodeUnresolved(schema, data)
 	if err != nil {
 		return Values{}, err
-	}
-	provided, err := indexProvidedValues(root)
-	if err != nil {
-		return Values{}, err
-	}
-
-	declared := schema.Fields()
-	declaredNames := make(map[string]struct{}, len(declared))
-	for _, field := range declared {
-		declaredNames[field.Name()] = struct{}{}
-	}
-	for name := range provided {
-		if _, exists := declaredNames[name]; !exists {
-			return Values{}, newValuesError("", ErrUnknownField, nil)
-		}
-	}
-
-	resolved := make(map[string]resolvedValue, len(declared))
-	pending := make([]pendingSecret, 0)
-	for _, field := range declared {
-		node, exists := provided[field.Name()]
-		if !exists {
-			if field.HasDefault() {
-				value, valueErr := decodeDefault(field)
-				if valueErr != nil {
-					clearResolvedValues(resolved)
-					return Values{}, newValuesError(field.Name(), ErrInvalidValue, nil)
-				}
-				resolved[field.Name()] = value
-				continue
-			}
-			if field.Required() {
-				clearResolvedValues(resolved)
-				return Values{}, newValuesError(field.Name(), ErrMissingField, nil)
-			}
-			continue
-		}
-		if field.Type() == manifest.ConfigSecret {
-			reference, referenceErr := decodeSecretReference(node)
-			if referenceErr != nil {
-				clearResolvedValues(resolved)
-				clearPendingSecrets(pending)
-				return Values{}, newValuesError(field.Name(), ErrInvalidValue, nil)
-			}
-			pending = append(pending, pendingSecret{name: field.Name(), reference: reference})
-			continue
-		}
-		value, valueErr := decodeDeclaredValue(node, field.Type(), field.Items(), field.Format())
-		if valueErr != nil || !enumContains(field, node, value) {
-			clearResolvedValues(resolved)
-			clearPendingSecrets(pending)
-			return Values{}, newValuesError(field.Name(), ErrInvalidValue, nil)
-		}
-		resolved[field.Name()] = resolvedValue{kind: field.Type(), value: value}
 	}
 
 	for index := range pending {
@@ -125,6 +71,83 @@ func Decode(ctx context.Context, resolver *Resolver, schema manifest.Config, dat
 		resolved[pending[index].name] = resolvedValue{kind: manifest.ConfigSecret, value: secret}
 	}
 	return Values{fields: resolved, initialized: true}, nil
+}
+
+// Validate checks one plugin-owned YAML configuration mapping against its
+// declaration without reading environment variables or files. It applies the
+// same type, default, enum, size, depth, and Secret-reference validation used
+// by Decode, then discards every parsed value and reference target.
+func Validate(schema manifest.Config, data []byte) error {
+	resolved, pending, err := decodeUnresolved(schema, data)
+	if err != nil {
+		return err
+	}
+	clearResolvedValues(resolved)
+	clearPendingSecrets(pending)
+	return nil
+}
+
+func decodeUnresolved(schema manifest.Config, data []byte) (map[string]resolvedValue, []pendingSecret, error) {
+	root, err := decodeValuesDocument(data)
+	if err != nil {
+		return nil, nil, err
+	}
+	provided, err := indexProvidedValues(root)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	declared := schema.Fields()
+	declaredNames := make(map[string]struct{}, len(declared))
+	for _, field := range declared {
+		declaredNames[field.Name()] = struct{}{}
+	}
+	for name := range provided {
+		if _, exists := declaredNames[name]; !exists {
+			return nil, nil, newValuesError("", ErrUnknownField, nil)
+		}
+	}
+
+	resolved := make(map[string]resolvedValue, len(declared))
+	pending := make([]pendingSecret, 0)
+	for _, field := range declared {
+		node, exists := provided[field.Name()]
+		if !exists {
+			if field.HasDefault() {
+				value, valueErr := decodeDefault(field)
+				if valueErr != nil {
+					clearResolvedValues(resolved)
+					return nil, nil, newValuesError(field.Name(), ErrInvalidValue, nil)
+				}
+				resolved[field.Name()] = value
+				continue
+			}
+			if field.Required() {
+				clearResolvedValues(resolved)
+				return nil, nil, newValuesError(field.Name(), ErrMissingField, nil)
+			}
+			continue
+		}
+		if field.Type() == manifest.ConfigSecret {
+			reference, referenceErr := decodeSecretReference(node)
+			if referenceErr != nil {
+				clearResolvedValues(resolved)
+				clearPendingSecrets(pending)
+				return nil, nil, newValuesError(field.Name(), ErrInvalidValue, nil)
+			}
+			pending = append(pending, pendingSecret{name: field.Name(), reference: reference})
+			continue
+		}
+		value, valueErr := decodeDeclaredValue(node, field.Type(), field.Items(), field.Format())
+		if valueErr != nil || !enumContains(field, node, value) {
+			clearResolvedValues(resolved)
+			clearPendingSecrets(pending)
+			return nil, nil, newValuesError(field.Name(), ErrInvalidValue, nil)
+		}
+		resolved[field.Name()] = resolvedValue{kind: field.Type(), value: value}
+	}
+
+	return resolved, pending, nil
 }
 
 type pendingSecret struct {
