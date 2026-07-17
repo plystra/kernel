@@ -1,0 +1,20 @@
+id: kernel.info/v1
+
+description: Reports non-sensitive Kernel compatibility information.
+
+request: {}
+
+response:
+  assembly_api:
+    type: string
+    required: true
+
+  kernel_module:
+    type: string
+    required: true
+
+  kernel_version:
+    type: string
+    required: true
+
+errors: []

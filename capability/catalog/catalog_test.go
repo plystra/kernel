@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/plystra/kernel/capability"
@@ -15,12 +17,15 @@ func TestDefinitionsAreValidatedAndSorted(t *testing.T) {
 	t.Parallel()
 
 	definitions := catalog.Definitions()
-	if len(definitions) == 0 {
-		t.Fatal("Definitions() is empty")
+	if got := definitionIDs(definitions); !slices.Equal(got, []string{"kernel.health/v1", "kernel.info/v1"}) {
+		t.Fatalf("Definitions() = %v", got)
 	}
 	for index, definition := range definitions {
 		if definition.ID().String() == "" {
 			t.Fatalf("definition %d has no ID", index)
+		}
+		if !strings.HasPrefix(definition.ID().Name(), "kernel.") {
+			t.Fatalf("definition %s is not intrinsic", definition.ID())
 		}
 		if index > 0 && definitions[index-1].ID().String() >= definition.ID().String() {
 			t.Fatalf("definitions are not uniquely sorted: %q then %q", definitions[index-1].ID(), definition.ID())
@@ -42,31 +47,49 @@ func TestDefinitionsAreValidatedAndSorted(t *testing.T) {
 	}
 }
 
-func TestLookupEmailSendV1(t *testing.T) {
+func TestLookupIntrinsicDefinitions(t *testing.T) {
 	t.Parallel()
 
-	id, err := capability.ParseIdentifier("email.send/v1")
-	if err != nil {
-		t.Fatalf("ParseIdentifier: %v", err)
+	tests := []struct {
+		id          string
+		description string
+		response    []string
+		digest      string
+	}{
+		{id: "kernel.health/v1", description: "Reports intrinsic Kernel liveness.", response: []string{"status"}, digest: "6b1b78b7e99fcae04e27eed02fd1c9d4cfbb92cb8e07565b4fe44b03f074820c"},
+		{id: "kernel.info/v1", description: "Reports non-sensitive Kernel compatibility information.", response: []string{"assembly_api", "kernel_module", "kernel_version"}, digest: "fb8538e46264d046cc04c79ee3974293d50edbb19cc4cfd0dca9955747e70153"},
 	}
-	definition, ok := catalog.Lookup(id)
-	if !ok {
-		t.Fatal("Lookup(email.send/v1) failed")
-	}
-	if definition.Contract().Description() != "Sends an email message." {
-		t.Fatalf("description = %q", definition.Contract().Description())
-	}
-	if got := fieldNames(definition.Contract().Request()); !reflect.DeepEqual(got, []string{"html", "subject", "text", "to"}) {
-		t.Fatalf("request fields = %v", got)
-	}
-	if got := definition.Contract().Errors(); !reflect.DeepEqual(got, []string{"authentication_failed", "invalid_recipient", "temporarily_unavailable"}) {
-		t.Fatalf("errors = %v", got)
-	}
-	if got := fmt.Sprintf("%x", definition.SchemaDigest()); got != "72c29e8589b3491986a5076b375844eea3f088b610ec9c8c40416f09b768c18f" {
-		t.Fatalf("schema digest = %s", got)
-	}
-	if source := definition.Source(); len(source) == 0 || source[len(source)-1] != '\n' || bytes.Contains(source, []byte{'\r'}) {
-		t.Fatalf("source is not canonical LF text: %q", source)
+	for _, test := range tests {
+		test := test
+		t.Run(test.id, func(t *testing.T) {
+			t.Parallel()
+			id, err := capability.ParseIdentifier(test.id)
+			if err != nil {
+				t.Fatalf("ParseIdentifier: %v", err)
+			}
+			definition, ok := catalog.Lookup(id)
+			if !ok {
+				t.Fatalf("Lookup(%s) failed", test.id)
+			}
+			if definition.Contract().Description() != test.description {
+				t.Fatalf("description = %q", definition.Contract().Description())
+			}
+			if got := fieldNames(definition.Contract().Request()); len(got) != 0 {
+				t.Fatalf("request fields = %v", got)
+			}
+			if got := fieldNames(definition.Contract().Response()); !reflect.DeepEqual(got, test.response) {
+				t.Fatalf("response fields = %v", got)
+			}
+			if got := definition.Contract().Errors(); len(got) != 0 {
+				t.Fatalf("errors = %v", got)
+			}
+			if got := fmt.Sprintf("%x", definition.SchemaDigest()); got != test.digest {
+				t.Fatalf("schema digest = %s", got)
+			}
+			if source := definition.Source(); len(source) == 0 || source[len(source)-1] != '\n' || bytes.Contains(source, []byte{'\r'}) {
+				t.Fatalf("source is not canonical LF text: %q", source)
+			}
+		})
 	}
 }
 
@@ -113,4 +136,12 @@ func fieldNames(schema manifest.Schema) []string {
 		names[index] = fields[index].Name()
 	}
 	return names
+}
+
+func definitionIDs(definitions []catalog.Definition) []string {
+	ids := make([]string, len(definitions))
+	for index, definition := range definitions {
+		ids[index] = definition.ID().String()
+	}
+	return ids
 }

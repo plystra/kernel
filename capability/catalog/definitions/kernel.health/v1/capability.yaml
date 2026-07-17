@@ -1,0 +1,13 @@
+id: kernel.health/v1
+
+description: Reports intrinsic Kernel liveness.
+
+request: {}
+
+response:
+  status:
+    type: string
+    enum: [healthy]
+    required: true
+
+errors: []

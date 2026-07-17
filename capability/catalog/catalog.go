@@ -1,4 +1,4 @@
-// Package catalog exposes canonical official Plystra capability definitions.
+// Package catalog exposes canonical intrinsic Kernel capability definitions.
 package catalog
 
 import (
