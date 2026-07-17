@@ -51,6 +51,12 @@ The Kernel receives one complete immutable registry. It distinguishes exact Capa
 
 Go plugins share one process and are not sandboxed. Generated Capability clients are the supported application API; raw dispatch remains a low-level Kernel boundary rather than an encouraged bypass for ordinary plugin code.
 
+## Provider lifecycle
+
+Plugins that own resources requiring explicit startup and shutdown may implement `lifecycle.Provider`. Generated assembly binds only those plugins and supplies their already-resolved deterministic order; the Kernel does not discover providers or recompute dependencies at runtime. Plugins without lifecycle work remain valid and need no lifecycle methods.
+
+The lifecycle manager starts providers in generated order and stops them in reverse order. Failed startup performs a bounded reverse-order rollback, including the failing provider in case it acquired resources before returning. Shutdown attempts every active provider, permits retry only for providers whose stop failed, recovers panics, and exposes only safe Plugin IDs and standard context cancellation or deadline causes rather than provider error text.
+
 ## Context and configuration
 
 The Kernel propagates ordinary Go context, cancellation, deadlines, trace correlation, and bounded opaque metadata without interpreting application identity. Generated code may carry typed AuthN-owned or AuthZ-owned values, but those remain application data.
