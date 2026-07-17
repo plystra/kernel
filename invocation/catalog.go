@@ -24,12 +24,25 @@ var (
 
 // ProviderKind distinguishes Kernel-owned endpoints from already-selected
 // plugin endpoints. It does not perform or influence provider selection.
-type ProviderKind = audit.ProviderKind
+type ProviderKind string
 
 const (
-	ProviderKindKernel = audit.ProviderKindKernel
-	ProviderKindPlugin = audit.ProviderKindPlugin
+	ProviderKindKernel ProviderKind = "kernel"
+	ProviderKindPlugin ProviderKind = "plugin"
 )
+
+// String returns the stable provider-kind representation.
+func (k ProviderKind) String() string {
+	if !k.Valid() {
+		return ""
+	}
+	return string(k)
+}
+
+// Valid reports whether the kind identifies one supported provider owner.
+func (k ProviderKind) Valid() bool {
+	return k == ProviderKindKernel || k == ProviderKindPlugin
+}
 
 // BindingOptions is the generated, already-resolved metadata for one endpoint.
 type BindingOptions struct {
@@ -39,7 +52,7 @@ type BindingOptions struct {
 	SchemaDigest  [sha256.Size]byte
 }
 
-// Binding joins one selected provider, its auditable module provenance, and
+// Binding joins one selected provider, its module provenance, and
 // schema digest to its executable endpoint.
 type Binding struct {
 	providerKind  ProviderKind
@@ -51,7 +64,7 @@ type Binding struct {
 
 // NewBinding validates one already-resolved executable endpoint. A plugin
 // binding requires its concrete Plugin ID; a Kernel binding must not have one.
-// Every binding requires immutable module build provenance for runtime audit.
+// Every binding requires immutable module build provenance for diagnostics.
 func NewBinding(options BindingOptions, endpoint Endpoint) (Binding, error) {
 	binding := Binding{
 		providerKind:  options.ProviderKind,

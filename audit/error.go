@@ -1,7 +1,12 @@
 package audit
 
-// ErrorCode is one stable machine-readable capability failure class recorded
-// by runtime audit and mapped consistently across transports.
+import "strings"
+
+// MaximumDetailCodeSize bounds safe machine-readable failure detail codes.
+const MaximumDetailCodeSize = 128
+
+// ErrorCode is one stable machine-readable capability failure class mapped
+// consistently across transports.
 type ErrorCode string
 
 const (
@@ -18,7 +23,7 @@ const (
 	ErrorVersionIncompatible ErrorCode = "version_incompatible"
 )
 
-// String returns the stable wire and audit representation.
+// String returns the stable wire representation.
 func (c ErrorCode) String() string {
 	return string(c)
 }
@@ -41,4 +46,36 @@ func (c ErrorCode) Valid() bool {
 	default:
 		return false
 	}
+}
+
+// ValidDetailCode reports whether a code is empty or a bounded canonical
+// lower-case dotted identifier safe for errors and transports.
+func ValidDetailCode(code string) bool {
+	if code == "" {
+		return true
+	}
+	if len(code) > MaximumDetailCodeSize {
+		return false
+	}
+	for _, segment := range strings.Split(code, ".") {
+		if segment == "" || segment[0] < 'a' || segment[0] > 'z' {
+			return false
+		}
+		previousUnderscore := false
+		for index := 1; index < len(segment); index++ {
+			character := segment[index]
+			switch {
+			case character >= 'a' && character <= 'z', character >= '0' && character <= '9':
+				previousUnderscore = false
+			case character == '_' && !previousUnderscore:
+				previousUnderscore = true
+			default:
+				return false
+			}
+		}
+		if previousUnderscore {
+			return false
+		}
+	}
+	return true
 }

@@ -1,32 +1,26 @@
 package invocation
 
 import (
-	"context"
 	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/plystra/kernel/audit"
 	"github.com/plystra/kernel/capability"
 )
 
 func TestNewDispatcherRequiresRuntimeConfiguration(t *testing.T) {
 	t.Parallel()
 
-	recorder := newTestInvocationRecorder(t)
 	for _, timeout := range []time.Duration{0, -time.Nanosecond, -time.Second} {
-		dispatcher, err := NewDispatcher(DispatcherOptions{DefaultTimeout: timeout, AuditRecorder: recorder})
+		dispatcher, err := NewDispatcher(DispatcherOptions{DefaultTimeout: timeout})
 		if !errors.Is(err, ErrInvalidDispatcher) || dispatcher != nil {
 			t.Fatalf("NewDispatcher(%s) = %#v, %v", timeout, dispatcher, err)
 		}
 	}
-	if dispatcher, err := NewDispatcher(DispatcherOptions{DefaultTimeout: time.Second}); !errors.Is(err, ErrInvalidDispatcher) || dispatcher != nil {
-		t.Fatalf("NewDispatcher(nil audit recorder) = %#v, %v", dispatcher, err)
-	}
-	dispatcher, err := NewDispatcher(DispatcherOptions{DefaultTimeout: 30 * time.Second, AuditRecorder: recorder})
-	if err != nil || !dispatcher.valid() || dispatcher.defaultTimeout != 30*time.Second || dispatcher.auditRecorder != recorder || dispatcher.Published() {
+	dispatcher, err := NewDispatcher(DispatcherOptions{DefaultTimeout: 30 * time.Second})
+	if err != nil || !dispatcher.valid() || dispatcher.defaultTimeout != 30*time.Second || dispatcher.Published() {
 		t.Fatalf("NewDispatcher(valid) = %#v, %v", dispatcher, err)
 	}
 }
@@ -202,30 +196,12 @@ func newTestDispatcher(t *testing.T) *Dispatcher {
 	t.Helper()
 	dispatcher, err := NewDispatcher(DispatcherOptions{
 		DefaultTimeout: time.Second,
-		AuditRecorder:  newTestInvocationRecorder(t),
 	})
 	if err != nil {
 		t.Fatalf("NewDispatcher: %v", err)
 	}
 	return dispatcher
 }
-
-func newTestInvocationRecorder(t *testing.T) *audit.InvocationRecorder {
-	t.Helper()
-	recorder, err := audit.NewInvocationRecorder(testInvocationAuditSink{}, time.Second)
-	if err != nil {
-		t.Fatalf("NewInvocationRecorder: %v", err)
-	}
-	return recorder
-}
-
-type testInvocationAuditSink struct{}
-
-func (testInvocationAuditSink) PersistInvocation(context.Context, audit.InvocationRecord) error {
-	return nil
-}
-
-func (testInvocationAuditSink) Flush(context.Context) error { return nil }
 
 func testDispatcherCatalog(t *testing.T, value string) (Catalog, capability.Identifier) {
 	t.Helper()

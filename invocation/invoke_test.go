@@ -29,7 +29,6 @@ func TestHandleInvokeRunsCompleteRawDispatchPath(t *testing.T) {
 
 	contract := capability.MustParseContract[invokeRequest, invokeResponse]("example.invoke/v1")
 	security := testGovernedSecurityContext(t)
-	sink := &invokeCaptureSink{}
 	var providerContext InvocationContext
 	harness := newInvokeHarness(t, contract, func(ctx context.Context, request invokeRequest) (invokeResponse, error) {
 		current, exists := Current(ctx)
@@ -42,31 +41,22 @@ func TestHandleInvokeRunsCompleteRawDispatchPath(t *testing.T) {
 		}
 		providerContext = current
 		return invokeResponse{Value: "handled:" + request.Value}, nil
-	}, invokeHarnessOptions{sink: sink, security: security})
+	}, invokeHarnessOptions{security: security})
 
 	response, err := harness.handle.Invoke(harness.root, invokeRequest{Value: "request"})
 	if err != nil || response.Value != "handled:request" {
 		t.Fatalf("Invoke = %#v, %v", response, err)
 	}
-	records := sink.Records()
-	if len(records) != 1 {
-		t.Fatalf("audit records = %d, want 1", len(records))
-	}
-	record := records[0]
 	rootRequestID, _ := RequestID(harness.root)
 	rootTraceID, _ := TraceID(harness.root)
-	if !record.Valid() || record.RuntimeCaller() != harness.handle.scope.caller || record.Capability() != contract.Identifier() ||
-		record.CapabilitySchemaDigest() != harness.binding.SchemaDigest() || record.ProviderKind() != audit.ProviderKindPlugin ||
-		record.ProviderPluginID() != harness.binding.ProviderID() || record.ProviderBuild() != harness.binding.ProviderBuild() ||
-		record.SecurityContext() != security || record.RequestID() != rootRequestID || record.TraceID() != rootTraceID ||
-		record.InvocationID() != providerContext.InvocationID() || record.ParentInvocationID().Valid() ||
-		record.ExecutionClass() != audit.ExecutionLocal || record.StartedAt().After(record.CompletedAt()) || record.Duration() < 0 ||
-		record.Outcome().Status() != audit.OutcomeSucceeded {
-		t.Fatalf("audit record = %#v", record)
+	if providerContext.RequestID() != rootRequestID || providerContext.TraceID() != rootTraceID ||
+		!providerContext.InvocationID().Valid() || providerContext.ParentInvocationID().Valid() ||
+		providerContext.SecurityContext() != security {
+		t.Fatalf("provider context = %#v", providerContext)
 	}
 }
 
-func TestHandleInvokeAuditsKernelProviderWithoutFabricatedPluginID(t *testing.T) {
+func TestHandleInvokeDispatchesKernelProvider(t *testing.T) {
 	t.Parallel()
 
 	contract := capability.MustParseContract[invokeRequest, invokeResponse]("kernel.info/v1")
@@ -84,8 +74,7 @@ func TestHandleInvokeAuditsKernelProviderWithoutFabricatedPluginID(t *testing.T)
 	if err != nil {
 		t.Fatalf("NewBinding: %v", err)
 	}
-	sink := &invokeCaptureSink{}
-	dispatcher := newInvokeDispatcher(t, sink, time.Second)
+	dispatcher := newInvokeDispatcher(t, time.Second)
 	catalog, err := NewCatalog([]Binding{binding})
 	if err != nil {
 		t.Fatalf("NewCatalog: %v", err)
@@ -98,10 +87,6 @@ func TestHandleInvokeAuditsKernelProviderWithoutFabricatedPluginID(t *testing.T)
 	if err != nil || response.Value != "kernel" {
 		t.Fatalf("Invoke = %#v, %v", response, err)
 	}
-	records := sink.Records()
-	if len(records) != 1 || records[0].ProviderKind() != audit.ProviderKindKernel || records[0].ProviderPluginID().String() != "" {
-		t.Fatalf("Kernel provider records = %#v", records)
-	}
 }
 
 func TestHandleInvokePropagatesNestedAncestryAndSecurity(t *testing.T) {
@@ -113,12 +98,7 @@ func TestHandleInvokePropagatesNestedAncestryAndSecurity(t *testing.T) {
 	innerProviderID := mustPluginID(t, "acme.invoke.inner")
 	callerID := mustPluginID(t, "acme.invoke.caller")
 	security := testGovernedSecurityContext(t)
-	sink := &invokeCaptureSink{}
-	recorder := mustInvocationRecorder(t, sink)
-	dispatcher, err := NewDispatcher(DispatcherOptions{
-		DefaultTimeout: time.Second,
-		AuditRecorder:  recorder,
-	})
+	dispatcher, err := NewDispatcher(DispatcherOptions{DefaultTimeout: time.Second})
 	if err != nil {
 		t.Fatalf("NewDispatcher: %v", err)
 	}
@@ -135,10 +115,22 @@ func TestHandleInvokePropagatesNestedAncestryAndSecurity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewHandle(inner): %v", err)
 	}
-	innerBinding := newInvokeBinding(t, innerContract, innerProviderID, func(_ context.Context, request invokeRequest) (invokeResponse, error) {
+	var outerContext InvocationContext
+	var innerContext InvocationContext
+	innerBinding := newInvokeBinding(t, innerContract, innerProviderID, func(ctx context.Context, request invokeRequest) (invokeResponse, error) {
+		var exists bool
+		innerContext, exists = Current(ctx)
+		if !exists {
+			t.Fatal("inner provider did not receive invocation context")
+		}
 		return invokeResponse{Value: "inner:" + request.Value}, nil
 	})
 	outerBinding := newInvokeBinding(t, outerContract, outerProviderID, func(ctx context.Context, request invokeRequest) (invokeResponse, error) {
+		var exists bool
+		outerContext, exists = Current(ctx)
+		if !exists {
+			t.Fatal("outer provider did not receive invocation context")
+		}
 		inner, err := innerHandle.Invoke(ctx, request)
 		if err != nil {
 			return invokeResponse{}, err
@@ -171,23 +163,11 @@ func TestHandleInvokePropagatesNestedAncestryAndSecurity(t *testing.T) {
 		t.Fatalf("outer Invoke = %#v, %v", response, err)
 	}
 
-	records := sink.Records()
-	if len(records) != 2 {
-		t.Fatalf("records = %d, want 2", len(records))
-	}
-	byCapability := make(map[string]audit.InvocationRecord, len(records))
-	for _, record := range records {
-		byCapability[record.Capability().String()] = record
-	}
-	outer := byCapability[outerContract.Identifier().String()]
-	inner := byCapability[innerContract.Identifier().String()]
-	if !outer.Valid() || !inner.Valid() || outer.RuntimeCaller() != callerIdentity || inner.RuntimeCaller() != outerProviderCaller ||
-		outer.ProviderPluginID() != outerProviderID || inner.ProviderPluginID() != innerProviderID ||
-		inner.ParentInvocationID() != outer.InvocationID() || outer.ParentInvocationID().Valid() ||
-		inner.RequestID() != outer.RequestID() || inner.TraceID() != outer.TraceID() ||
-		inner.SecurityContext() != security || outer.SecurityContext() != security ||
-		inner.Outcome().Status() != audit.OutcomeSucceeded || outer.Outcome().Status() != audit.OutcomeSucceeded {
-		t.Fatalf("nested records = outer %#v / inner %#v", outer, inner)
+	if !outerContext.InvocationID().Valid() || !innerContext.InvocationID().Valid() ||
+		innerContext.ParentInvocationID() != outerContext.InvocationID() || outerContext.ParentInvocationID().Valid() ||
+		innerContext.RequestID() != outerContext.RequestID() || innerContext.TraceID() != outerContext.TraceID() ||
+		innerContext.SecurityContext() != security || outerContext.SecurityContext() != security {
+		t.Fatalf("nested contexts = outer %#v / inner %#v", outerContext, innerContext)
 	}
 }
 
@@ -198,8 +178,7 @@ func TestHandleInvokeRejectsNestedCallThatDropsGovernedContext(t *testing.T) {
 	innerContract := capability.MustParseContract[invokeRequest, invokeResponse]("example.context-inner/v1")
 	outerProviderID := mustPluginID(t, "acme.context.outer")
 	innerProviderID := mustPluginID(t, "acme.context.inner")
-	sink := &invokeCaptureSink{}
-	dispatcher := newInvokeDispatcher(t, sink, time.Second)
+	dispatcher := newInvokeDispatcher(t, time.Second)
 	outerProviderCaller, err := audit.NewPluginCallerIdentity(outerProviderID)
 	if err != nil {
 		t.Fatalf("NewPluginCallerIdentity: %v", err)
@@ -233,21 +212,22 @@ func TestHandleInvokeRejectsNestedCallThatDropsGovernedContext(t *testing.T) {
 	if response != (invokeResponse{}) || innerProviderCalls.Load() != 0 {
 		t.Fatalf("dropped nested context = %#v, %v, inner provider calls %d", response, err, innerProviderCalls.Load())
 	}
-	records := sink.Records()
-	if len(records) != 1 || records[0].Capability() != outerContract.Identifier() ||
-		records[0].Outcome().ErrorCode() != audit.ErrorInvalidArgument || records[0].Outcome().DetailCode() != detailGovernedContextRequired {
-		t.Fatalf("dropped nested context records = %#v", records)
-	}
 }
 
 func TestHandleInvokeIsSafeForConcurrentRootCalls(t *testing.T) {
 	t.Parallel()
 
 	contract := capability.MustParseContract[invokeRequest, invokeResponse]("example.concurrent-invoke/v1")
-	sink := &invokeCaptureSink{}
-	harness := newInvokeHarness(t, contract, func(_ context.Context, request invokeRequest) (invokeResponse, error) {
+	contexts := make(chan InvocationContext, 128)
+	harness := newInvokeHarness(t, contract, func(ctx context.Context, request invokeRequest) (invokeResponse, error) {
+		current, exists := Current(ctx)
+		if !exists {
+			t.Error("provider did not receive invocation context")
+			return invokeResponse{}, errors.New("missing invocation context")
+		}
+		contexts <- current
 		return invokeResponse(request), nil
-	}, invokeHarnessOptions{sink: sink})
+	}, invokeHarnessOptions{})
 
 	const calls = 128
 	var group sync.WaitGroup
@@ -263,19 +243,18 @@ func TestHandleInvokeIsSafeForConcurrentRootCalls(t *testing.T) {
 	}
 	group.Wait()
 
-	records := sink.Records()
+	close(contexts)
 	requestID, _ := RequestID(harness.root)
 	traceID, _ := TraceID(harness.root)
-	invocations := make(map[audit.InvocationID]struct{}, len(records))
-	for _, record := range records {
-		if !record.Valid() || record.RequestID() != requestID || record.TraceID() != traceID ||
-			record.ParentInvocationID().Valid() || record.Outcome().Status() != audit.OutcomeSucceeded {
-			t.Fatalf("concurrent record = %#v", record)
+	invocations := make(map[audit.InvocationID]struct{}, calls)
+	for current := range contexts {
+		if current.RequestID() != requestID || current.TraceID() != traceID || current.ParentInvocationID().Valid() {
+			t.Fatalf("concurrent context = %#v", current)
 		}
-		invocations[record.InvocationID()] = struct{}{}
+		invocations[current.InvocationID()] = struct{}{}
 	}
-	if len(records) != calls || len(invocations) != calls {
-		t.Fatalf("records/unique invocations = %d/%d, want %d", len(records), len(invocations), calls)
+	if len(invocations) != calls {
+		t.Fatalf("unique invocations = %d, want %d", len(invocations), calls)
 	}
 }
 
@@ -295,40 +274,38 @@ func TestHandleInvokeNormalizesProviderFailuresAndPanics(t *testing.T) {
 		handler    capability.Handler[invokeRequest, invokeResponse]
 		code       audit.ErrorCode
 		detail     string
-		status     audit.OutcomeStatus
 		wantShared *Error
 	}{
 		{name: "safe error", handler: func(context.Context, invokeRequest) (invokeResponse, error) {
 			return invokeResponse{Value: "must not escape"}, safe
-		}, code: audit.ErrorInvalidArgument, detail: "contract.invalid_request", status: audit.OutcomeFailed, wantShared: safe},
+		}, code: audit.ErrorInvalidArgument, detail: "contract.invalid_request", wantShared: safe},
 		{name: "wrapped safe error", handler: func(context.Context, invokeRequest) (invokeResponse, error) {
 			return invokeResponse{}, fmt.Errorf("provider password=secret: %w", safe)
-		}, code: audit.ErrorInvalidArgument, detail: "contract.invalid_request", status: audit.OutcomeFailed, wantShared: safe},
+		}, code: audit.ErrorInvalidArgument, detail: "contract.invalid_request", wantShared: safe},
 		{name: "result unknown", handler: func(context.Context, invokeRequest) (invokeResponse, error) {
 			return invokeResponse{}, unknown
-		}, code: audit.ErrorResultUnknown, detail: "transport.delivery_unknown", status: audit.OutcomeResultUnknown, wantShared: unknown},
+		}, code: audit.ErrorResultUnknown, detail: "transport.delivery_unknown", wantShared: unknown},
 		{name: "raw sensitive error", handler: func(context.Context, invokeRequest) (invokeResponse, error) {
 			return invokeResponse{}, errors.New("provider password=secret")
-		}, code: audit.ErrorInternal, detail: detailProviderFailed, status: audit.OutcomeFailed},
+		}, code: audit.ErrorInternal, detail: detailProviderFailed},
 		{name: "normalizer panic", handler: func(context.Context, invokeRequest) (invokeResponse, error) {
 			return invokeResponse{}, panickingProviderError{}
-		}, code: audit.ErrorInternal, detail: detailProviderFailed, status: audit.OutcomeFailed},
+		}, code: audit.ErrorInternal, detail: detailProviderFailed},
 		{name: "panic", handler: func(context.Context, invokeRequest) (invokeResponse, error) {
 			panic("provider token=secret")
-		}, code: audit.ErrorInternal, detail: detailProviderPanic, status: audit.OutcomeFailed},
+		}, code: audit.ErrorInternal, detail: detailProviderPanic},
 		{name: "deadline error", handler: func(context.Context, invokeRequest) (invokeResponse, error) {
 			return invokeResponse{}, context.DeadlineExceeded
-		}, code: audit.ErrorTimeout, detail: detailDeadlineExceeded, status: audit.OutcomeTimedOut},
+		}, code: audit.ErrorTimeout, detail: detailDeadlineExceeded},
 		{name: "cancelled error", handler: func(context.Context, invokeRequest) (invokeResponse, error) {
 			return invokeResponse{}, context.Canceled
-		}, code: audit.ErrorCancelled, detail: detailInvocationCancelled, status: audit.OutcomeCancelled},
+		}, code: audit.ErrorCancelled, detail: detailInvocationCancelled},
 	} {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			contract := capability.MustParseContract[invokeRequest, invokeResponse]("example.provider-failure/v1")
-			sink := &invokeCaptureSink{}
-			harness := newInvokeHarness(t, contract, test.handler, invokeHarnessOptions{sink: sink})
+			harness := newInvokeHarness(t, contract, test.handler, invokeHarnessOptions{})
 			response, err := harness.handle.Invoke(harness.root, invokeRequest{})
 			boundary := requireInvocationError(t, err, test.code, test.detail)
 			if response != (invokeResponse{}) || strings.Contains(err.Error(), "secret") {
@@ -336,11 +313,6 @@ func TestHandleInvokeNormalizesProviderFailuresAndPanics(t *testing.T) {
 			}
 			if test.wantShared != nil && boundary != test.wantShared {
 				t.Fatalf("safe boundary copy = %#v, want original %#v", boundary, test.wantShared)
-			}
-			records := sink.Records()
-			if len(records) != 1 || records[0].Outcome().Status() != test.status ||
-				records[0].Outcome().ErrorCode() != test.code || records[0].Outcome().DetailCode() != test.detail {
-				t.Fatalf("provider failure records = %#v", records)
 			}
 		})
 	}
@@ -350,22 +322,17 @@ func TestHandleInvokeAppliesDeadlineToProvider(t *testing.T) {
 	t.Parallel()
 
 	contract := capability.MustParseContract[invokeRequest, invokeResponse]("example.deadline/v1")
-	sink := &invokeCaptureSink{}
 	var providerCalls atomic.Int32
 	harness := newInvokeHarness(t, contract, func(ctx context.Context, _ invokeRequest) (invokeResponse, error) {
 		providerCalls.Add(1)
 		<-ctx.Done()
 		return invokeResponse{Value: "late success"}, nil
-	}, invokeHarnessOptions{sink: sink, defaultTimeout: 15 * time.Millisecond})
+	}, invokeHarnessOptions{defaultTimeout: 15 * time.Millisecond})
 
 	response, err := harness.handle.Invoke(harness.root, invokeRequest{})
 	requireInvocationError(t, err, audit.ErrorTimeout, detailDeadlineExceeded)
 	if !errors.Is(err, context.DeadlineExceeded) || response != (invokeResponse{}) || providerCalls.Load() != 1 {
 		t.Fatalf("deadline Invoke = %#v, %v, provider calls %d", response, err, providerCalls.Load())
-	}
-	records := sink.Records()
-	if len(records) != 1 || records[0].Outcome().Status() != audit.OutcomeTimedOut || records[0].Duration() < 10*time.Millisecond {
-		t.Fatalf("deadline records = %#v", records)
 	}
 }
 
@@ -374,35 +341,29 @@ func TestHandleInvokePropagatesTrustedCancellation(t *testing.T) {
 
 	parent, cancel := context.WithCancel(context.Background())
 	contract := capability.MustParseContract[invokeRequest, invokeResponse]("example.cancel/v1")
-	sink := &invokeCaptureSink{}
 	harness := newInvokeHarness(t, contract, func(ctx context.Context, _ invokeRequest) (invokeResponse, error) {
 		cancel()
 		<-ctx.Done()
 		return invokeResponse{}, ctx.Err()
-	}, invokeHarnessOptions{sink: sink, parent: parent})
+	}, invokeHarnessOptions{parent: parent})
 
 	response, err := harness.handle.Invoke(harness.root, invokeRequest{})
 	requireInvocationError(t, err, audit.ErrorCancelled, detailInvocationCancelled)
 	if !errors.Is(err, context.Canceled) || response != (invokeResponse{}) {
 		t.Fatalf("cancelled Invoke = %#v, %v", response, err)
 	}
-	records := sink.Records()
-	if len(records) != 1 || records[0].Outcome().Status() != audit.OutcomeCancelled {
-		t.Fatalf("cancellation records = %#v", records)
-	}
 }
 
-func TestHandleInvokeAuditsPreCancelledTrustedAuthorityThroughDetachedContext(t *testing.T) {
+func TestHandleInvokeRejectsPreCancelledTrustedAuthorityThroughDetachedContext(t *testing.T) {
 	t.Parallel()
 
 	parent, cancel := context.WithCancel(context.Background())
 	contract := capability.MustParseContract[invokeRequest, invokeResponse]("example.pre-cancel/v1")
-	sink := &invokeCaptureSink{}
 	var providerCalls atomic.Int32
 	harness := newInvokeHarness(t, contract, func(context.Context, invokeRequest) (invokeResponse, error) {
 		providerCalls.Add(1)
 		return invokeResponse{}, nil
-	}, invokeHarnessOptions{sink: sink, parent: parent})
+	}, invokeHarnessOptions{parent: parent})
 	cancel()
 	detached := context.WithoutCancel(harness.root)
 	if detached.Err() != nil {
@@ -414,10 +375,6 @@ func TestHandleInvokeAuditsPreCancelledTrustedAuthorityThroughDetachedContext(t 
 	if !errors.Is(err, context.Canceled) || response != (invokeResponse{}) || providerCalls.Load() != 0 {
 		t.Fatalf("pre-cancelled Invoke = %#v, %v, provider calls %d", response, err, providerCalls.Load())
 	}
-	records := sink.Records()
-	if len(records) != 1 || records[0].Outcome().Status() != audit.OutcomeCancelled {
-		t.Fatalf("pre-cancelled records = %#v", records)
-	}
 }
 
 func TestHandleInvokeRechecksTrustedCancellationAfterFastProviderReturn(t *testing.T) {
@@ -425,20 +382,15 @@ func TestHandleInvokeRechecksTrustedCancellationAfterFastProviderReturn(t *testi
 
 	parent, cancel := context.WithCancel(context.Background())
 	contract := capability.MustParseContract[invokeRequest, invokeResponse]("example.fast-cancel/v1")
-	sink := &invokeCaptureSink{}
 	harness := newInvokeHarness(t, contract, func(context.Context, invokeRequest) (invokeResponse, error) {
 		cancel()
 		return invokeResponse{Value: "must not escape"}, nil
-	}, invokeHarnessOptions{sink: sink, parent: parent})
+	}, invokeHarnessOptions{parent: parent})
 
 	response, err := harness.handle.Invoke(harness.root, invokeRequest{})
 	requireInvocationError(t, err, audit.ErrorCancelled, detailInvocationCancelled)
 	if !errors.Is(err, context.Canceled) || response != (invokeResponse{}) {
 		t.Fatalf("fast cancellation Invoke = %#v, %v", response, err)
-	}
-	records := sink.Records()
-	if len(records) != 1 || records[0].Outcome().Status() != audit.OutcomeCancelled {
-		t.Fatalf("fast cancellation records = %#v", records)
 	}
 }
 
@@ -448,34 +400,28 @@ func TestHandleInvokeClassifiesTrustedAuthorityDeadline(t *testing.T) {
 	parent, cancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
 	defer cancel()
 	contract := capability.MustParseContract[invokeRequest, invokeResponse]("example.authority-deadline/v1")
-	sink := &invokeCaptureSink{}
 	harness := newInvokeHarness(t, contract, func(ctx context.Context, _ invokeRequest) (invokeResponse, error) {
 		<-ctx.Done()
 		return invokeResponse{}, ctx.Err()
-	}, invokeHarnessOptions{sink: sink, parent: parent, defaultTimeout: time.Second})
+	}, invokeHarnessOptions{parent: parent, defaultTimeout: time.Second})
 
 	response, err := harness.handle.Invoke(harness.root, invokeRequest{})
 	requireInvocationError(t, err, audit.ErrorTimeout, detailDeadlineExceeded)
 	if !errors.Is(err, context.DeadlineExceeded) || response != (invokeResponse{}) {
 		t.Fatalf("authority deadline Invoke = %#v, %v", response, err)
 	}
-	records := sink.Records()
-	if len(records) != 1 || records[0].Outcome().Status() != audit.OutcomeTimedOut {
-		t.Fatalf("authority deadline records = %#v", records)
-	}
 }
 
-func TestHandleInvokeAuditsContractMismatchWithoutCallingProvider(t *testing.T) {
+func TestHandleInvokeRejectsContractMismatchWithoutCallingProvider(t *testing.T) {
 	t.Parallel()
 
 	providerContract := capability.MustParseContract[invokeRequest, invokeResponse]("example.contract/v1")
 	callerContract := capability.MustParseContract[invokeRequest, invokeResponse]("example.contract/v1")
-	sink := &invokeCaptureSink{}
 	var providerCalls atomic.Int32
 	harness := newInvokeHarness(t, providerContract, func(context.Context, invokeRequest) (invokeResponse, error) {
 		providerCalls.Add(1)
 		return invokeResponse{}, nil
-	}, invokeHarnessOptions{sink: sink})
+	}, invokeHarnessOptions{})
 	handle, err := NewHandle(harness.handle.scope, callerContract, true)
 	if err != nil {
 		t.Fatalf("NewHandle: %v", err)
@@ -485,44 +431,17 @@ func TestHandleInvokeAuditsContractMismatchWithoutCallingProvider(t *testing.T) 
 	if response != (invokeResponse{}) || providerCalls.Load() != 0 {
 		t.Fatalf("contract mismatch = %#v, %v, provider calls %d", response, err, providerCalls.Load())
 	}
-	records := sink.Records()
-	if len(records) != 1 || records[0].Outcome().DetailCode() != detailContractMismatch {
-		t.Fatalf("contract mismatch records = %#v", records)
-	}
 }
 
-func TestHandleInvokeFailsClosedWhenAuditDeliveryFails(t *testing.T) {
-	t.Parallel()
-
-	contract := capability.MustParseContract[invokeRequest, invokeResponse]("example.audit-failure/v1")
-	sink := &rejectingInvokeSink{}
-	var providerCalls atomic.Int32
-	harness := newInvokeHarness(t, contract, func(context.Context, invokeRequest) (invokeResponse, error) {
-		providerCalls.Add(1)
-		return invokeResponse{Value: "must not escape"}, nil
-	}, invokeHarnessOptions{sink: sink})
-
-	response, err := harness.handle.Invoke(harness.root, invokeRequest{})
-	requireInvocationError(t, err, audit.ErrorResultUnknown, detailAuditRecordingFailed)
-	if response != (invokeResponse{}) || providerCalls.Load() != 1 || strings.Contains(err.Error(), "secret") {
-		t.Fatalf("audit failure = %#v, %v, provider calls %d", response, err, providerCalls.Load())
-	}
-	attempts := sink.Attempts()
-	if len(attempts) != 1 || !attempts[0].Valid() || attempts[0].Outcome().Status() != audit.OutcomeSucceeded {
-		t.Fatalf("audit attempts = %#v", attempts)
-	}
-}
-
-func TestHandleInvokeRejectsPreEntryFailuresWithoutProviderOrAudit(t *testing.T) {
+func TestHandleInvokeRejectsPreEntryFailuresWithoutProviderExecution(t *testing.T) {
 	t.Parallel()
 
 	contract := capability.MustParseContract[invokeRequest, invokeResponse]("example.pre-entry/v1")
-	sink := &invokeCaptureSink{}
 	var providerCalls atomic.Int32
 	harness := newInvokeHarness(t, contract, func(context.Context, invokeRequest) (invokeResponse, error) {
 		providerCalls.Add(1)
 		return invokeResponse{}, nil
-	}, invokeHarnessOptions{sink: sink})
+	}, invokeHarnessOptions{})
 
 	var zero Handle[invokeRequest, invokeResponse]
 	_, err := zero.Invoke(context.Background(), invokeRequest{})
@@ -539,14 +458,12 @@ func TestHandleInvokeRejectsPreEntryFailuresWithoutProviderOrAudit(t *testing.T)
 	_, err = unavailable.Invoke(harness.root, invokeRequest{})
 	requireInvocationError(t, err, audit.ErrorUnavailable, detailCapabilityUnavailable)
 
-	unpublishedSink := &invokeCaptureSink{}
-	unpublished := newInvokeDispatcher(t, unpublishedSink, time.Second)
+	unpublished := newInvokeDispatcher(t, time.Second)
 	unpublishedHandle, unpublishedRoot := newInvokeHandleAndRoot(t, unpublished, contract, testAnonymousSecurityContext(t))
 	_, err = unpublishedHandle.Invoke(unpublishedRoot, invokeRequest{})
 	requireInvocationError(t, err, audit.ErrorUnavailable, detailDispatcherNotReady)
 
-	emptySink := &invokeCaptureSink{}
-	empty := newInvokeDispatcher(t, emptySink, time.Second)
+	empty := newInvokeDispatcher(t, time.Second)
 	emptyCatalog, err := NewCatalog(nil)
 	if err != nil {
 		t.Fatalf("NewCatalog(nil): %v", err)
@@ -558,13 +475,13 @@ func TestHandleInvokeRejectsPreEntryFailuresWithoutProviderOrAudit(t *testing.T)
 	_, err = emptyHandle.Invoke(emptyRoot, invokeRequest{})
 	requireInvocationError(t, err, audit.ErrorUnavailable, detailCapabilityUnavailable)
 
-	if providerCalls.Load() != 0 || len(sink.Records()) != 0 || len(unpublishedSink.Records()) != 0 || len(emptySink.Records()) != 0 {
-		t.Fatalf("pre-entry work reached provider or audit: provider=%d records=%d/%d/%d", providerCalls.Load(), len(sink.Records()), len(unpublishedSink.Records()), len(emptySink.Records()))
+	if providerCalls.Load() != 0 {
+		t.Fatalf("pre-entry work reached provider: %d calls", providerCalls.Load())
 	}
 }
 
-func BenchmarkCapabilityInvoke(b *testing.B) {
-	handle, root, _ := benchmarkInvokeRuntime(b, benchmarkNoopInvocationSink{})
+func BenchmarkKernelCanonicalDispatch(b *testing.B) {
+	handle, root, _ := benchmarkInvokeRuntime(b)
 	request := invokeRequest{Value: "request"}
 	var response invokeResponse
 	b.ReportAllocs()
@@ -577,28 +494,9 @@ func BenchmarkCapabilityInvoke(b *testing.B) {
 		}
 	}
 	benchmarkInvokeResponse = response
-}
-
-func BenchmarkCapabilityInvokeWithAudit(b *testing.B) {
-	sink := &benchmarkCountingInvocationSink{}
-	handle, root, _ := benchmarkInvokeRuntime(b, sink)
-	request := invokeRequest{Value: "request"}
-	var response invokeResponse
-	b.ReportAllocs()
-	b.ResetTimer()
-	for b.Loop() {
-		var err error
-		response, err = handle.Invoke(root, request)
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-	benchmarkInvokeResponse = response
-	benchmarkAuditCount = sink.count.Load()
 }
 
 type invokeHarnessOptions struct {
-	sink           audit.InvocationSink
 	security       audit.SecurityContext
 	parent         context.Context
 	defaultTimeout time.Duration
@@ -618,9 +516,6 @@ func newInvokeHarness(
 	options invokeHarnessOptions,
 ) invokeHarness {
 	t.Helper()
-	if options.sink == nil {
-		t.Fatal("newInvokeHarness requires an audit sink")
-	}
 	if !options.security.Valid() {
 		options.security = testAnonymousSecurityContext(t)
 	}
@@ -632,7 +527,7 @@ func newInvokeHarness(
 	}
 	providerID := mustPluginID(t, "acme.invoke.provider")
 	binding := newInvokeBinding(t, contract, providerID, handler)
-	dispatcher := newInvokeDispatcher(t, options.sink, options.defaultTimeout)
+	dispatcher := newInvokeDispatcher(t, options.defaultTimeout)
 	catalog, err := NewCatalog([]Binding{binding})
 	if err != nil {
 		t.Fatalf("NewCatalog: %v", err)
@@ -661,12 +556,9 @@ func newInvokeHarness(
 	}
 }
 
-func newInvokeDispatcher(t *testing.T, sink audit.InvocationSink, timeout time.Duration) *Dispatcher {
+func newInvokeDispatcher(t *testing.T, timeout time.Duration) *Dispatcher {
 	t.Helper()
-	dispatcher, err := NewDispatcher(DispatcherOptions{
-		DefaultTimeout: timeout,
-		AuditRecorder:  mustInvocationRecorder(t, sink),
-	})
+	dispatcher, err := NewDispatcher(DispatcherOptions{DefaultTimeout: timeout})
 	if err != nil {
 		t.Fatalf("NewDispatcher: %v", err)
 	}
@@ -731,15 +623,6 @@ func newInvokeBinding(
 	return binding
 }
 
-func mustInvocationRecorder(t *testing.T, sink audit.InvocationSink) *audit.InvocationRecorder {
-	t.Helper()
-	recorder, err := audit.NewInvocationRecorder(sink, time.Second)
-	if err != nil {
-		t.Fatalf("NewInvocationRecorder: %v", err)
-	}
-	return recorder
-}
-
 func requireInvocationError(t *testing.T, err error, code audit.ErrorCode, detail string) *Error {
 	t.Helper()
 	var boundary *Error
@@ -749,75 +632,13 @@ func requireInvocationError(t *testing.T, err error, code audit.ErrorCode, detai
 	return boundary
 }
 
-type invokeCaptureSink struct {
-	mu      sync.Mutex
-	records []audit.InvocationRecord
-}
-
-func (s *invokeCaptureSink) PersistInvocation(_ context.Context, record audit.InvocationRecord) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.records = append(s.records, record)
-	return nil
-}
-
-func (*invokeCaptureSink) Flush(context.Context) error { return nil }
-
-func (s *invokeCaptureSink) Records() []audit.InvocationRecord {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]audit.InvocationRecord(nil), s.records...)
-}
-
-type rejectingInvokeSink struct {
-	mu       sync.Mutex
-	attempts []audit.InvocationRecord
-}
-
 type panickingProviderError struct{}
 
 func (panickingProviderError) Error() string { return "provider password=secret" }
 
 func (panickingProviderError) As(any) bool { panic("provider token=secret") }
 
-func (s *rejectingInvokeSink) PersistInvocation(_ context.Context, record audit.InvocationRecord) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.attempts = append(s.attempts, record)
-	return errors.New("audit database password=secret")
-}
-
-func (*rejectingInvokeSink) Flush(context.Context) error { return nil }
-
-func (s *rejectingInvokeSink) Attempts() []audit.InvocationRecord {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]audit.InvocationRecord(nil), s.attempts...)
-}
-
-type benchmarkNoopInvocationSink struct{}
-
-func (benchmarkNoopInvocationSink) PersistInvocation(context.Context, audit.InvocationRecord) error {
-	return nil
-}
-
-func (benchmarkNoopInvocationSink) Flush(context.Context) error { return nil }
-
-type benchmarkCountingInvocationSink struct {
-	count atomic.Uint64
-}
-
-func (s *benchmarkCountingInvocationSink) PersistInvocation(_ context.Context, record audit.InvocationRecord) error {
-	if !record.Valid() {
-		return audit.ErrInvalidInvocationRecord
-	}
-	s.count.Add(1)
-	return nil
-}
-
-func (*benchmarkCountingInvocationSink) Flush(context.Context) error { return nil }
-
-func benchmarkInvokeRuntime(b *testing.B, sink audit.InvocationSink) (Handle[invokeRequest, invokeResponse], context.Context, Binding) {
+func benchmarkInvokeRuntime(b *testing.B) (Handle[invokeRequest, invokeResponse], context.Context, Binding) {
 	b.Helper()
 	contract := capability.MustParseContract[invokeRequest, invokeResponse]("example.benchmark-invoke/v1")
 	endpoint, err := NewEndpoint(contract, func(_ context.Context, request invokeRequest) (invokeResponse, error) {
@@ -843,11 +664,7 @@ func benchmarkInvokeRuntime(b *testing.B, sink audit.InvocationSink) (Handle[inv
 	if err != nil {
 		b.Fatalf("NewCatalog: %v", err)
 	}
-	recorder, err := audit.NewInvocationRecorder(sink, time.Second)
-	if err != nil {
-		b.Fatalf("NewInvocationRecorder: %v", err)
-	}
-	dispatcher, err := NewDispatcher(DispatcherOptions{DefaultTimeout: time.Second, AuditRecorder: recorder})
+	dispatcher, err := NewDispatcher(DispatcherOptions{DefaultTimeout: time.Second})
 	if err != nil {
 		b.Fatalf("NewDispatcher: %v", err)
 	}
@@ -885,12 +702,4 @@ func benchmarkInvokeRuntime(b *testing.B, sink audit.InvocationSink) (Handle[inv
 	return handle, root, binding
 }
 
-var (
-	benchmarkInvokeResponse invokeResponse
-	benchmarkAuditCount     uint64
-)
-
-var _ audit.InvocationSink = (*invokeCaptureSink)(nil)
-var _ audit.InvocationSink = (*rejectingInvokeSink)(nil)
-var _ audit.InvocationSink = benchmarkNoopInvocationSink{}
-var _ audit.InvocationSink = (*benchmarkCountingInvocationSink)(nil)
+var benchmarkInvokeResponse invokeResponse

@@ -3,7 +3,6 @@ package invocation
 import (
 	"context"
 	"errors"
-	"time"
 
 	"github.com/plystra/kernel/audit"
 )
@@ -20,14 +19,11 @@ const (
 	detailContractMismatch        = "runtime.contract_mismatch"
 	detailInvalidEndpoint         = "runtime.invalid_endpoint"
 	detailProviderFailed          = "provider.failed"
-	detailAuditRecordInvalid      = "audit.record_invalid"
-	detailAuditRecordingFailed    = "audit.recording_failed"
 	detailErrorNormalization      = "runtime.error_normalization_failed"
 )
 
 // Invoke executes one exact canonical capability through raw Kernel dispatch.
-// Every entered invocation is deadline-bound, normalized to safe errors, and
-// terminally audited before a result is exposed.
+// Every entered invocation is deadline-bound and normalized to safe errors.
 func (h Handle[Request, Response]) Invoke(ctx context.Context, request Request) (Response, error) {
 	var zero Response
 	if !h.valid() {
@@ -59,19 +55,7 @@ func (h Handle[Request, Response]) Invoke(ctx context.Context, request Request) 
 	}
 	defer cleanup()
 
-	startedInstant := time.Now()
-	response, boundary, executionBegan := invokeBounded(callContext, h, binding, request)
-	completedInstant := time.Now()
-	record, err := newInvocationAuditRecord(h, binding, callContext, startedInstant, completedInstant, boundary)
-	if err != nil {
-		return zero, newInvocationBoundary(audit.ErrorInternal, detailAuditRecordInvalid)
-	}
-	if err := h.scope.dispatcher.auditRecorder.Record(record); err != nil {
-		if executionBegan {
-			return zero, newInvocationBoundary(audit.ErrorResultUnknown, detailAuditRecordingFailed)
-		}
-		return zero, newInvocationBoundary(audit.ErrorUnavailable, detailAuditRecordingFailed)
-	}
+	response, boundary := invokeBounded(callContext, h, binding, request)
 	if boundary != nil {
 		return zero, boundary
 	}
@@ -83,64 +67,23 @@ func invokeBounded[Request, Response any](
 	handle Handle[Request, Response],
 	binding Binding,
 	request Request,
-) (Response, *Error, bool) {
+) (Response, *Error) {
 	var zero Response
 	if boundary := invocationContextError(ctx); boundary != nil {
-		return zero, boundary, false
+		return zero, boundary
 	}
 	if binding.endpoint.definition != handle.definition {
-		return zero, newInvocationBoundary(audit.ErrorInternal, detailContractMismatch), false
+		return zero, newInvocationBoundary(audit.ErrorInternal, detailContractMismatch)
 	}
 
 	response, err := invokeEndpoint[Request, Response](ctx, binding.endpoint, handle.definition, request)
 	if boundary := invocationContextError(ctx); boundary != nil {
-		return zero, boundary, true
+		return zero, boundary
 	}
 	if err != nil {
-		return zero, normalizeProviderError(err), true
+		return zero, normalizeProviderError(err)
 	}
-	return response, nil, true
-}
-
-func newInvocationAuditRecord[Request, Response any](
-	handle Handle[Request, Response],
-	binding Binding,
-	ctx context.Context,
-	startedInstant time.Time,
-	completedInstant time.Time,
-	boundary *Error,
-) (audit.InvocationRecord, error) {
-	current, exists := Current(ctx)
-	if !exists {
-		return audit.InvocationRecord{}, audit.ErrInvalidInvocationRecord
-	}
-	startedAt := startedInstant.Round(0)
-	completedAt := completedInstant.Round(0)
-	if completedAt.Before(startedAt) {
-		completedAt = startedAt
-	}
-	duration := completedInstant.Sub(startedInstant)
-	if duration < 0 {
-		duration = 0
-	}
-	return audit.NewInvocationRecord(audit.InvocationRecordOptions{
-		RuntimeCaller:          handle.scope.caller,
-		Capability:             handle.definition.Identifier(),
-		CapabilitySchemaDigest: binding.schemaDigest,
-		ProviderKind:           binding.providerKind,
-		ProviderPluginID:       binding.providerID,
-		ProviderBuild:          binding.providerBuild,
-		SecurityContext:        current.SecurityContext(),
-		RequestID:              current.RequestID(),
-		TraceID:                current.TraceID(),
-		InvocationID:           current.InvocationID(),
-		ParentInvocationID:     current.ParentInvocationID(),
-		ExecutionClass:         audit.ExecutionLocal,
-		StartedAt:              startedAt,
-		CompletedAt:            completedAt,
-		Duration:               duration,
-		Outcome:                invocationOutcome(boundary),
-	})
+	return response, nil
 }
 
 func invocationContextError(ctx context.Context) *Error {
@@ -191,18 +134,6 @@ func normalizeProviderError(providerError error) (boundary *Error) {
 	default:
 		return boundary
 	}
-}
-
-func invocationOutcome(boundary *Error) audit.Outcome {
-	if boundary == nil {
-		return audit.NewSucceededOutcome()
-	}
-	outcome, err := audit.NewErrorOutcome(boundary.Code(), boundary.DetailCode())
-	if err == nil {
-		return outcome
-	}
-	outcome, _ = audit.NewErrorOutcome(audit.ErrorInternal, detailErrorNormalization)
-	return outcome
 }
 
 func newInvocationBoundary(code audit.ErrorCode, detailCode string) *Error {

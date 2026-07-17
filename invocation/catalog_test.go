@@ -13,6 +13,24 @@ import (
 	"github.com/plystra/kernel/plugin"
 )
 
+func TestProviderKindsAreClosedAndStable(t *testing.T) {
+	t.Parallel()
+
+	for kind, want := range map[ProviderKind]string{
+		ProviderKindKernel: "kernel",
+		ProviderKindPlugin: "plugin",
+	} {
+		if !kind.Valid() || kind.String() != want {
+			t.Fatalf("ProviderKind %q = %q, valid %t", kind, kind.String(), kind.Valid())
+		}
+	}
+	for _, kind := range []ProviderKind{"", "remote", "PLUGIN"} {
+		if kind.Valid() || kind.String() != "" {
+			t.Fatalf("invalid ProviderKind %q was accepted", kind)
+		}
+	}
+}
+
 func TestCatalogCopiesResolvedPluginBindings(t *testing.T) {
 	t.Parallel()
 

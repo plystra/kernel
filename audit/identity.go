@@ -1,5 +1,4 @@
-// Package audit defines immutable identities, records, and delivery boundaries
-// owned by the Kernel's runtime audit boundary.
+// Package audit defines immutable runtime identities and safe error classes.
 package audit
 
 import (

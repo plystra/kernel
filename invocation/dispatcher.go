@@ -5,7 +5,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/plystra/kernel/audit"
 	"github.com/plystra/kernel/capability"
 )
 
@@ -22,26 +21,23 @@ var (
 // DispatcherOptions configures mandatory runtime dispatch behavior.
 type DispatcherOptions struct {
 	DefaultTimeout time.Duration
-	AuditRecorder  *audit.InvocationRecorder
 }
 
 // Dispatcher owns one atomically published immutable executable catalog. A
 // Dispatcher must not be copied after first use.
 type Dispatcher struct {
 	defaultTimeout time.Duration
-	auditRecorder  *audit.InvocationRecorder
 	catalog        atomic.Pointer[catalogState]
 }
 
-// NewDispatcher creates an unpublished Dispatcher with mandatory audit
-// recording and a positive default execution timeout.
+// NewDispatcher creates an unpublished Dispatcher with a positive default
+// execution timeout.
 func NewDispatcher(options DispatcherOptions) (*Dispatcher, error) {
-	if options.DefaultTimeout <= 0 || !options.AuditRecorder.Valid() {
+	if options.DefaultTimeout <= 0 {
 		return nil, ErrInvalidDispatcher
 	}
 	return &Dispatcher{
 		defaultTimeout: options.DefaultTimeout,
-		auditRecorder:  options.AuditRecorder,
 	}, nil
 }
 
@@ -68,7 +64,7 @@ func (d *Dispatcher) Published() bool {
 }
 
 func (d *Dispatcher) valid() bool {
-	return d != nil && d.defaultTimeout > 0 && d.auditRecorder.Valid()
+	return d != nil && d.defaultTimeout > 0
 }
 
 func (d *Dispatcher) snapshot() (*catalogState, error) {
