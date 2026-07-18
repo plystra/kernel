@@ -43,8 +43,13 @@ func NormalizePartial(schema manifest.Config, data []byte) (PartialValues, error
 	}
 
 	names := make([]string, 0, len(provided))
+	for name := range provided {
+		names = append(names, name)
+	}
+	sort.Strings(names)
 	fields := make(map[string]partialField, len(provided))
-	for name, node := range provided {
+	for _, name := range names {
+		node := provided[name]
 		field, exists := schema.Lookup(name)
 		if !exists {
 			return PartialValues{}, newValuesError("", ErrUnknownField, nil)
@@ -57,10 +62,8 @@ func NormalizePartial(schema manifest.Config, data []byte) (PartialValues, error
 		if err != nil {
 			return PartialValues{}, newValuesError(field.Name(), ErrInvalidValue, nil)
 		}
-		names = append(names, name)
 		fields[name] = partialField{yaml: normalized, digest: digest}
 	}
-	sort.Strings(names)
 	return PartialValues{names: names, fields: fields, initialized: true}, nil
 }
 

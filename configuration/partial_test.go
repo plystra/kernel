@@ -139,6 +139,33 @@ token: {type: secret}
 	}
 }
 
+func TestNormalizePartialReportsInvalidFieldsDeterministically(t *testing.T) {
+	t.Parallel()
+
+	schema := configurationSchema(t, `
+settings: {type: object}
+token: {type: secret}
+`)
+	inputs := [][]byte{
+		[]byte("settings: []\ntoken: {}\n"),
+		[]byte("token: {}\nsettings: []\n"),
+	}
+	var first string
+	for iteration := 0; iteration < 100; iteration++ {
+		for _, input := range inputs {
+			partial, err := configuration.NormalizePartial(schema, input)
+			if partial.Valid() || !errors.Is(err, configuration.ErrInvalidValues) || !errors.Is(err, configuration.ErrInvalidValue) || !strings.Contains(err.Error(), `field "settings"`) {
+				t.Fatalf("NormalizePartial = %#v, %v", partial, err)
+			}
+			if first == "" {
+				first = err.Error()
+			} else if err.Error() != first {
+				t.Fatalf("NormalizePartial error changed: %q then %q", first, err.Error())
+			}
+		}
+	}
+}
+
 func TestPartialValuesRedactAndFailClosed(t *testing.T) {
 	t.Parallel()
 
