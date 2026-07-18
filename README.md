@@ -158,7 +158,6 @@ go test ./invocation -run '^$' -bench '^BenchmarkKernelCanonicalDispatch$' -benc
 ```
 
 Benchmark results depend on the machine and Go toolchain. Record that context
-with local evidence and compare applicable results with the performance
-requirements in
-[`core-philosophy/08-kernel-runtime.md`](https://github.com/plystra/core-philosophy/blob/main/08-kernel-runtime.md);
-do not treat one machine's numbers as universal expectations.
+with local evidence and compare applicable results with the binding Kernel
+runtime performance requirements; do not treat one machine's numbers as
+universal expectations.
