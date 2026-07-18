@@ -114,11 +114,10 @@ func normalizeProviderError(providerError error) (boundary error) {
 			boundary = newInvocationBoundary(ErrorInternal, detailProviderFailed)
 		}
 	}()
-	if semantic, ok := providerError.(*SemanticError); ok && semantic.valid() {
+	if semantic, ok := errors.AsType[*SemanticError](providerError); ok && semantic.valid() {
 		return semantic
 	}
-	var safe *Error
-	if errors.As(providerError, &safe) && safe.valid() {
+	if safe, ok := errors.AsType[*Error](providerError); ok && safe.valid() {
 		return safe
 	}
 	switch {

@@ -326,8 +326,7 @@ func TestHandleInvokePreservesDeclaredSemanticError(t *testing.T) {
 	}, invokeHarnessOptions{})
 
 	response, err := harness.handle.Invoke(harness.root, invokeRequest{})
-	var semantic *SemanticError
-	if !errors.As(err, &semantic) || !semantic.valid() || semantic.SemanticErrorCode() != "invalid_recipient" {
+	if semantic, ok := errors.AsType[*SemanticError](err); !ok || !semantic.valid() || semantic.SemanticErrorCode() != "invalid_recipient" {
 		t.Fatalf("semantic error = %#v / %v", semantic, err)
 	}
 	if response != (invokeResponse{}) || strings.Contains(err.Error(), "password") || strings.Contains(err.Error(), "secret") {

@@ -112,8 +112,7 @@ func TestEndpointPreservesOnlyDeclaredSemanticErrors(t *testing.T) {
 				t.Fatalf("NewEndpoint: %v", err)
 			}
 			response, err := invokeEndpoint[endpointRequest, endpointResponse](context.Background(), endpoint, contract.Definition(), endpointRequest{})
-			var semantic *SemanticError
-			if !errors.As(err, &semantic) || !semantic.valid() || semantic.SemanticErrorCode() != "invalid_recipient" {
+			if semantic, ok := errors.AsType[*SemanticError](err); !ok || !semantic.valid() || semantic.SemanticErrorCode() != "invalid_recipient" {
 				t.Fatalf("semantic error = %#v / %v", semantic, err)
 			}
 			if response != (endpointResponse{}) || strings.Contains(err.Error(), "secret") {
@@ -326,8 +325,7 @@ func FuzzEndpointSemanticErrorBoundary(f *testing.F) {
 			t.Fatalf("response = %#v, want zero", response)
 		}
 		if code == "invalid_recipient" {
-			var semantic *SemanticError
-			if !errors.As(err, &semantic) || semantic.SemanticErrorCode() != code {
+			if semantic, ok := errors.AsType[*SemanticError](err); !ok || semantic.SemanticErrorCode() != code {
 				t.Fatalf("declared semantic error = %#v / %v", semantic, err)
 			}
 			return
