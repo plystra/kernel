@@ -30,6 +30,25 @@ func TestProviderKindsAreClosedAndStable(t *testing.T) {
 	}
 }
 
+func TestSelectionReasonsAreClosedAndStable(t *testing.T) {
+	t.Parallel()
+
+	for reason, want := range map[SelectionReason]string{
+		SelectionReasonIntrinsic:    "intrinsic",
+		SelectionReasonSoleProvider: "sole-provider",
+		SelectionReasonExplicit:     "explicit",
+	} {
+		if !reason.Valid() || reason.String() != want {
+			t.Fatalf("SelectionReason %q = %q, valid %t", reason, reason.String(), reason.Valid())
+		}
+	}
+	for _, reason := range []SelectionReason{"", "priority", "EXPLICIT"} {
+		if reason.Valid() || reason.String() != "" {
+			t.Fatalf("invalid SelectionReason %q was accepted", reason)
+		}
+	}
+}
+
 func TestCatalogCopiesResolvedPluginBindings(t *testing.T) {
 	t.Parallel()
 
@@ -42,15 +61,17 @@ func TestCatalogCopiesResolvedPluginBindings(t *testing.T) {
 	providerBuild := mustModuleBuild(t, "github.com/acme/email", "v1.4.2", "git:0123456789abcdef")
 	digest := sha256.Sum256([]byte("email.send/v1 schema"))
 	binding, err := NewBinding(BindingOptions{
-		ProviderKind:  ProviderKindPlugin,
-		ProviderID:    providerID,
-		ProviderBuild: providerBuild,
-		SchemaDigest:  digest,
+		ProviderKind:    ProviderKindPlugin,
+		ProviderID:      providerID,
+		ProviderPackage: "github.com/acme/email/smtp",
+		ProviderBuild:   providerBuild,
+		SelectionReason: SelectionReasonExplicit,
+		SchemaDigest:    digest,
 	}, endpoint)
 	if err != nil {
 		t.Fatalf("NewBinding: %v", err)
 	}
-	if binding.Capability() != contract.Identifier() || binding.Definition() != contract.Definition() || binding.ProviderKind() != ProviderKindPlugin || binding.ProviderID() != providerID || binding.ProviderBuild() != providerBuild || binding.SchemaDigest() != digest {
+	if binding.Capability() != contract.Identifier() || binding.Definition() != contract.Definition() || binding.ProviderKind() != ProviderKindPlugin || binding.ProviderID() != providerID || binding.ProviderPackage() != "github.com/acme/email/smtp" || binding.ProviderBuild() != providerBuild || binding.SelectionReason() != SelectionReasonExplicit || binding.SchemaDigest() != digest {
 		t.Fatalf("binding accessors = %#v", binding)
 	}
 
@@ -61,7 +82,7 @@ func TestCatalogCopiesResolvedPluginBindings(t *testing.T) {
 	}
 	source[0] = Binding{}
 	got, exists := catalog.Lookup(contract.Identifier())
-	if !exists || got.ProviderID() != providerID || got.ProviderBuild() != providerBuild || got.SchemaDigest() != digest {
+	if !exists || got.ProviderID() != providerID || got.ProviderPackage() != "github.com/acme/email/smtp" || got.ProviderBuild() != providerBuild || got.SelectionReason() != SelectionReasonExplicit || got.SchemaDigest() != digest {
 		t.Fatalf("Lookup = %#v, %t", got, exists)
 	}
 	bindings := catalog.Bindings()
@@ -81,14 +102,16 @@ func TestCatalogSupportsKernelBindingWithoutPluginID(t *testing.T) {
 	}
 	providerBuild := mustModuleBuild(t, "github.com/plystra/kernel", "v0.1.0", "")
 	binding, err := NewBinding(BindingOptions{
-		ProviderKind:  ProviderKindKernel,
-		ProviderBuild: providerBuild,
-		SchemaDigest:  sha256.Sum256([]byte("kernel.health/v1 schema")),
+		ProviderKind:    ProviderKindKernel,
+		ProviderPackage: "github.com/plystra/kernel/intrinsic",
+		ProviderBuild:   providerBuild,
+		SelectionReason: SelectionReasonIntrinsic,
+		SchemaDigest:    sha256.Sum256([]byte("kernel.health/v1 schema")),
 	}, endpoint)
 	if err != nil {
 		t.Fatalf("NewBinding: %v", err)
 	}
-	if binding.ProviderKind() != ProviderKindKernel || binding.ProviderID().String() != "" || binding.ProviderBuild() != providerBuild {
+	if binding.ProviderKind() != ProviderKindKernel || binding.ProviderID().String() != "" || binding.ProviderPackage() != "github.com/plystra/kernel/intrinsic" || binding.ProviderBuild() != providerBuild || binding.SelectionReason() != SelectionReasonIntrinsic {
 		t.Fatalf("Kernel binding = %#v", binding)
 	}
 	catalog, err := NewCatalog([]Binding{binding})
@@ -96,7 +119,7 @@ func TestCatalogSupportsKernelBindingWithoutPluginID(t *testing.T) {
 		t.Fatalf("NewCatalog: %v", err)
 	}
 	got, exists := catalog.Lookup(contract.Identifier())
-	if !exists || got.ProviderKind() != ProviderKindKernel || got.ProviderID().String() != "" || got.ProviderBuild() != providerBuild {
+	if !exists || got.ProviderKind() != ProviderKindKernel || got.ProviderID().String() != "" || got.ProviderPackage() != "github.com/plystra/kernel/intrinsic" || got.ProviderBuild() != providerBuild || got.SelectionReason() != SelectionReasonIntrinsic {
 		t.Fatalf("Kernel Lookup = %#v, %t", got, exists)
 	}
 }
@@ -112,17 +135,23 @@ func TestNewBindingRejectsInvalidMetadata(t *testing.T) {
 	providerID := mustPluginID(t, "acme.example.provider")
 	providerBuild := mustModuleBuild(t, "github.com/acme/example", "v1.0.0", "")
 	digest := sha256.Sum256([]byte("example.operation/v1 schema"))
+	validPlugin := BindingOptions{ProviderKind: ProviderKindPlugin, ProviderID: providerID, ProviderPackage: "github.com/acme/example/provider", ProviderBuild: providerBuild, SelectionReason: SelectionReasonSoleProvider, SchemaDigest: digest}
 	tests := []struct {
 		name     string
 		options  BindingOptions
 		endpoint Endpoint
 	}{
-		{name: "zero endpoint", options: BindingOptions{ProviderKind: ProviderKindPlugin, ProviderID: providerID, ProviderBuild: providerBuild, SchemaDigest: digest}},
-		{name: "zero digest", options: BindingOptions{ProviderKind: ProviderKindPlugin, ProviderID: providerID, ProviderBuild: providerBuild}, endpoint: endpoint},
-		{name: "zero provider build", options: BindingOptions{ProviderKind: ProviderKindPlugin, ProviderID: providerID, SchemaDigest: digest}, endpoint: endpoint},
-		{name: "unknown provider kind", options: BindingOptions{ProviderID: providerID, ProviderBuild: providerBuild, SchemaDigest: digest}, endpoint: endpoint},
-		{name: "Kernel with plugin ID", options: BindingOptions{ProviderKind: ProviderKindKernel, ProviderID: providerID, ProviderBuild: providerBuild, SchemaDigest: digest}, endpoint: endpoint},
-		{name: "plugin without ID", options: BindingOptions{ProviderKind: ProviderKindPlugin, ProviderBuild: providerBuild, SchemaDigest: digest}, endpoint: endpoint},
+		{name: "zero endpoint", options: validPlugin},
+		{name: "zero digest", options: BindingOptions{ProviderKind: ProviderKindPlugin, ProviderID: providerID, ProviderPackage: "github.com/acme/example/provider", ProviderBuild: providerBuild, SelectionReason: SelectionReasonSoleProvider}, endpoint: endpoint},
+		{name: "zero provider build", options: BindingOptions{ProviderKind: ProviderKindPlugin, ProviderID: providerID, ProviderPackage: "github.com/acme/example/provider", SelectionReason: SelectionReasonSoleProvider, SchemaDigest: digest}, endpoint: endpoint},
+		{name: "missing provider package", options: BindingOptions{ProviderKind: ProviderKindPlugin, ProviderID: providerID, ProviderBuild: providerBuild, SelectionReason: SelectionReasonSoleProvider, SchemaDigest: digest}, endpoint: endpoint},
+		{name: "provider package outside module", options: BindingOptions{ProviderKind: ProviderKindPlugin, ProviderID: providerID, ProviderPackage: "github.com/other/provider", ProviderBuild: providerBuild, SelectionReason: SelectionReasonSoleProvider, SchemaDigest: digest}, endpoint: endpoint},
+		{name: "unknown provider kind", options: BindingOptions{ProviderID: providerID, ProviderPackage: "github.com/acme/example/provider", ProviderBuild: providerBuild, SelectionReason: SelectionReasonSoleProvider, SchemaDigest: digest}, endpoint: endpoint},
+		{name: "missing selection reason", options: BindingOptions{ProviderKind: ProviderKindPlugin, ProviderID: providerID, ProviderPackage: "github.com/acme/example/provider", ProviderBuild: providerBuild, SchemaDigest: digest}, endpoint: endpoint},
+		{name: "Kernel with plugin ID", options: BindingOptions{ProviderKind: ProviderKindKernel, ProviderID: providerID, ProviderPackage: "github.com/acme/example/provider", ProviderBuild: providerBuild, SelectionReason: SelectionReasonIntrinsic, SchemaDigest: digest}, endpoint: endpoint},
+		{name: "Kernel with ordinary selection", options: BindingOptions{ProviderKind: ProviderKindKernel, ProviderPackage: "github.com/acme/example/provider", ProviderBuild: providerBuild, SelectionReason: SelectionReasonSoleProvider, SchemaDigest: digest}, endpoint: endpoint},
+		{name: "plugin without ID", options: BindingOptions{ProviderKind: ProviderKindPlugin, ProviderPackage: "github.com/acme/example/provider", ProviderBuild: providerBuild, SelectionReason: SelectionReasonSoleProvider, SchemaDigest: digest}, endpoint: endpoint},
+		{name: "plugin with intrinsic selection", options: BindingOptions{ProviderKind: ProviderKindPlugin, ProviderID: providerID, ProviderPackage: "github.com/acme/example/provider", ProviderBuild: providerBuild, SelectionReason: SelectionReasonIntrinsic, SchemaDigest: digest}, endpoint: endpoint},
 	}
 	for _, test := range tests {
 		test := test
@@ -132,7 +161,7 @@ func TestNewBindingRejectsInvalidMetadata(t *testing.T) {
 			if !errors.Is(err, ErrInvalidBinding) {
 				t.Fatalf("NewBinding error = %v, want ErrInvalidBinding", err)
 			}
-			if binding.valid() || binding.Capability().String() != "" || binding.Definition().Valid() || binding.ProviderKind() != "" || binding.ProviderID().String() != "" || binding.ProviderBuild().Valid() || binding.SchemaDigest() != [sha256.Size]byte{} {
+			if binding.valid() || binding.Capability().String() != "" || binding.Definition().Valid() || binding.ProviderKind() != "" || binding.ProviderID().String() != "" || binding.ProviderPackage() != "" || binding.ProviderBuild().Valid() || binding.SelectionReason() != "" || binding.SchemaDigest() != [sha256.Size]byte{} {
 				t.Fatalf("invalid binding = %#v", binding)
 			}
 		})
@@ -155,11 +184,11 @@ func TestNewCatalogRejectsInvalidAndDuplicateBindings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEndpoint second: %v", err)
 	}
-	first, err := NewBinding(BindingOptions{ProviderKind: ProviderKindPlugin, ProviderID: providerID, ProviderBuild: providerBuild, SchemaDigest: digest}, firstEndpoint)
+	first, err := NewBinding(BindingOptions{ProviderKind: ProviderKindPlugin, ProviderID: providerID, ProviderPackage: "github.com/acme/example/provider", ProviderBuild: providerBuild, SelectionReason: SelectionReasonSoleProvider, SchemaDigest: digest}, firstEndpoint)
 	if err != nil {
 		t.Fatalf("NewBinding first: %v", err)
 	}
-	second, err := NewBinding(BindingOptions{ProviderKind: ProviderKindPlugin, ProviderID: providerID, ProviderBuild: providerBuild, SchemaDigest: digest}, secondEndpoint)
+	second, err := NewBinding(BindingOptions{ProviderKind: ProviderKindPlugin, ProviderID: providerID, ProviderPackage: "github.com/acme/example/provider", ProviderBuild: providerBuild, SelectionReason: SelectionReasonSoleProvider, SchemaDigest: digest}, secondEndpoint)
 	if err != nil {
 		t.Fatalf("NewBinding second: %v", err)
 	}
@@ -320,10 +349,12 @@ func benchmarkCatalog(b *testing.B) (Catalog, capability.Identifier) {
 		b.Fatalf("ParseID: %v", err)
 	}
 	binding, err := NewBinding(BindingOptions{
-		ProviderKind:  ProviderKindPlugin,
-		ProviderID:    providerID,
-		ProviderBuild: mustModuleBuildBenchmark(b, "github.com/acme/example", "v1.0.0", ""),
-		SchemaDigest:  sha256.Sum256([]byte("example.benchmark/v1 schema")),
+		ProviderKind:    ProviderKindPlugin,
+		ProviderID:      providerID,
+		ProviderPackage: "github.com/acme/example/provider",
+		ProviderBuild:   mustModuleBuildBenchmark(b, "github.com/acme/example", "v1.0.0", ""),
+		SelectionReason: SelectionReasonSoleProvider,
+		SchemaDigest:    sha256.Sum256([]byte("example.benchmark/v1 schema")),
 	}, endpoint)
 	if err != nil {
 		b.Fatalf("NewBinding: %v", err)
@@ -343,10 +374,12 @@ func testBinding(t *testing.T, identifier string, providerID plugin.ID) Binding 
 		t.Fatalf("NewEndpoint: %v", err)
 	}
 	binding, err := NewBinding(BindingOptions{
-		ProviderKind:  ProviderKindPlugin,
-		ProviderID:    providerID,
-		ProviderBuild: mustModuleBuild(t, "github.com/acme/example", "v1.0.0", ""),
-		SchemaDigest:  sha256.Sum256([]byte(identifier + " schema")),
+		ProviderKind:    ProviderKindPlugin,
+		ProviderID:      providerID,
+		ProviderPackage: "github.com/acme/example/provider",
+		ProviderBuild:   mustModuleBuild(t, "github.com/acme/example", "v1.0.0", ""),
+		SelectionReason: SelectionReasonSoleProvider,
+		SchemaDigest:    sha256.Sum256([]byte(identifier + " schema")),
 	}, endpoint)
 	if err != nil {
 		t.Fatalf("NewBinding: %v", err)

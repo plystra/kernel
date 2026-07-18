@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/plystra/kernel/capability"
 	"github.com/plystra/kernel/plugin"
+	"golang.org/x/mod/module"
 )
 
 var (
@@ -43,22 +45,54 @@ func (k ProviderKind) Valid() bool {
 	return k == ProviderKindKernel || k == ProviderKindPlugin
 }
 
+// SelectionReason records why generated resolution chose one implementation.
+// It is immutable runtime provenance and never performs provider selection.
+type SelectionReason string
+
+const (
+	// SelectionReasonIntrinsic identifies a Kernel-owned intrinsic endpoint.
+	SelectionReasonIntrinsic SelectionReason = "intrinsic"
+	// SelectionReasonSoleProvider identifies the only compatible ordinary
+	// provider visible for a required Capability.
+	SelectionReasonSoleProvider SelectionReason = "sole-provider"
+	// SelectionReasonExplicit identifies an ordinary provider selected by an
+	// explicit application capabilities.use declaration.
+	SelectionReasonExplicit SelectionReason = "explicit"
+)
+
+// String returns the stable selection-reason representation.
+func (r SelectionReason) String() string {
+	if !r.Valid() {
+		return ""
+	}
+	return string(r)
+}
+
+// Valid reports whether the reason is one supported resolved selection.
+func (r SelectionReason) Valid() bool {
+	return r == SelectionReasonIntrinsic || r == SelectionReasonSoleProvider || r == SelectionReasonExplicit
+}
+
 // BindingOptions is the generated, already-resolved metadata for one endpoint.
 type BindingOptions struct {
-	ProviderKind  ProviderKind
-	ProviderID    plugin.ID
-	ProviderBuild ModuleBuild
-	SchemaDigest  [sha256.Size]byte
+	ProviderKind    ProviderKind
+	ProviderID      plugin.ID
+	ProviderPackage string
+	ProviderBuild   ModuleBuild
+	SelectionReason SelectionReason
+	SchemaDigest    [sha256.Size]byte
 }
 
 // Binding joins one selected provider, its module provenance, and
 // schema digest to its executable endpoint.
 type Binding struct {
-	providerKind  ProviderKind
-	providerID    plugin.ID
-	providerBuild ModuleBuild
-	schemaDigest  [sha256.Size]byte
-	endpoint      Endpoint
+	providerKind    ProviderKind
+	providerID      plugin.ID
+	providerPackage string
+	providerBuild   ModuleBuild
+	selectionReason SelectionReason
+	schemaDigest    [sha256.Size]byte
+	endpoint        Endpoint
 }
 
 // NewBinding validates one already-resolved executable endpoint. A plugin
@@ -66,11 +100,13 @@ type Binding struct {
 // Every binding requires immutable module build provenance for diagnostics.
 func NewBinding(options BindingOptions, endpoint Endpoint) (Binding, error) {
 	binding := Binding{
-		providerKind:  options.ProviderKind,
-		providerID:    options.ProviderID,
-		providerBuild: options.ProviderBuild,
-		schemaDigest:  options.SchemaDigest,
-		endpoint:      endpoint,
+		providerKind:    options.ProviderKind,
+		providerID:      options.ProviderID,
+		providerPackage: options.ProviderPackage,
+		providerBuild:   options.ProviderBuild,
+		selectionReason: options.SelectionReason,
+		schemaDigest:    options.SchemaDigest,
+		endpoint:        endpoint,
 	}
 	if !binding.valid() {
 		return Binding{}, ErrInvalidBinding
@@ -112,12 +148,29 @@ func (b Binding) ProviderID() plugin.ID {
 	return b.providerID
 }
 
+// ProviderPackage returns the canonical Go package containing the selected
+// implementation constructor and provider type.
+func (b Binding) ProviderPackage() string {
+	if !b.valid() {
+		return ""
+	}
+	return b.providerPackage
+}
+
 // ProviderBuild returns the selected implementation's Go module provenance.
 func (b Binding) ProviderBuild() ModuleBuild {
 	if !b.valid() {
 		return ModuleBuild{}
 	}
 	return b.providerBuild
+}
+
+// SelectionReason returns why generated resolution chose this implementation.
+func (b Binding) SelectionReason() SelectionReason {
+	if !b.valid() {
+		return ""
+	}
+	return b.selectionReason
 }
 
 // SchemaDigest returns the selected capability's canonical SHA-256 schema
@@ -130,17 +183,25 @@ func (b Binding) SchemaDigest() [sha256.Size]byte {
 }
 
 func (b Binding) valid() bool {
-	if !b.endpoint.valid() || !b.providerBuild.Valid() || b.schemaDigest == [sha256.Size]byte{} {
+	if !b.endpoint.valid() || !b.providerBuild.Valid() || !validProviderPackage(b.providerBuild.ModulePath(), b.providerPackage) ||
+		!b.selectionReason.Valid() || b.schemaDigest == [sha256.Size]byte{} {
 		return false
 	}
 	switch b.providerKind {
 	case ProviderKindKernel:
-		return b.providerID.String() == ""
+		return b.providerID.String() == "" && b.selectionReason == SelectionReasonIntrinsic
 	case ProviderKindPlugin:
-		return b.providerID.String() != ""
+		return b.providerID.String() != "" && b.selectionReason != SelectionReasonIntrinsic
 	default:
 		return false
 	}
+}
+
+func validProviderPackage(modulePath, packagePath string) bool {
+	if module.CheckImportPath(packagePath) != nil {
+		return false
+	}
+	return packagePath == modulePath || strings.HasPrefix(packagePath, modulePath+"/")
 }
 
 type catalogState struct {

@@ -66,9 +66,11 @@ func TestHandleInvokeDispatchesKernelProvider(t *testing.T) {
 		t.Fatalf("NewEndpoint: %v", err)
 	}
 	binding, err := NewBinding(BindingOptions{
-		ProviderKind:  ProviderKindKernel,
-		ProviderBuild: mustModuleBuild(t, "github.com/plystra/kernel", "v0.1.0", ""),
-		SchemaDigest:  sha256.Sum256([]byte("kernel.info/v1 schema")),
+		ProviderKind:    ProviderKindKernel,
+		ProviderPackage: "github.com/plystra/kernel/intrinsic",
+		ProviderBuild:   mustModuleBuild(t, "github.com/plystra/kernel", "v0.1.0", ""),
+		SelectionReason: SelectionReasonIntrinsic,
+		SchemaDigest:    sha256.Sum256([]byte("kernel.info/v1 schema")),
 	}, endpoint)
 	if err != nil {
 		t.Fatalf("NewBinding: %v", err)
@@ -586,10 +588,12 @@ func newInvokeBinding(
 		t.Fatalf("NewEndpoint: %v", err)
 	}
 	binding, err := NewBinding(BindingOptions{
-		ProviderKind:  ProviderKindPlugin,
-		ProviderID:    providerID,
-		ProviderBuild: mustModuleBuild(t, "github.com/acme/invoke", "v1.0.0", ""),
-		SchemaDigest:  sha256.Sum256([]byte(contract.Identifier().String() + " schema")),
+		ProviderKind:    ProviderKindPlugin,
+		ProviderID:      providerID,
+		ProviderPackage: "github.com/acme/invoke/provider",
+		ProviderBuild:   mustModuleBuild(t, "github.com/acme/invoke", "v1.0.0", ""),
+		SelectionReason: SelectionReasonSoleProvider,
+		SchemaDigest:    sha256.Sum256([]byte(contract.Identifier().String() + " schema")),
 	}, endpoint)
 	if err != nil {
 		t.Fatalf("NewBinding: %v", err)
@@ -626,10 +630,12 @@ func benchmarkInvokeRuntime(b *testing.B) (Handle[invokeRequest, invokeResponse]
 		b.Fatalf("ParseID(provider): %v", err)
 	}
 	binding, err := NewBinding(BindingOptions{
-		ProviderKind:  ProviderKindPlugin,
-		ProviderID:    providerID,
-		ProviderBuild: mustModuleBuildBenchmark(b, "github.com/acme/benchmark", "v1.0.0", ""),
-		SchemaDigest:  sha256.Sum256([]byte("example.benchmark-invoke/v1 schema")),
+		ProviderKind:    ProviderKindPlugin,
+		ProviderID:      providerID,
+		ProviderPackage: "github.com/acme/benchmark/provider",
+		ProviderBuild:   mustModuleBuildBenchmark(b, "github.com/acme/benchmark", "v1.0.0", ""),
+		SelectionReason: SelectionReasonSoleProvider,
+		SchemaDigest:    sha256.Sum256([]byte("example.benchmark-invoke/v1 schema")),
 	}, endpoint)
 	if err != nil {
 		b.Fatalf("NewBinding: %v", err)
