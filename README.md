@@ -78,6 +78,8 @@ kernel.info/v1
 
 They are implemented directly by the Kernel, require no ordinary provider or `capabilities.use` entry, cannot be overridden by plugins, and remain available regardless of the selected application plugin set. HTTP exposure is still explicit, and responses redact private configuration, Secrets, sensitive paths, and unsafe build details.
 
+The `intrinsic` package publishes the shared typed contracts and constructs both executable Kernel bindings in canonical ID order. Assembly supplies only validated Kernel Go Module provenance; the bindings use intrinsic selection, carry no Plugin ID, and can form a complete catalog with no ordinary providers. `kernel.health/v1` returns only `healthy`. `kernel.info/v1` returns assembly API `v1`, `github.com/plystra/kernel`, and the canonical Kernel module version, or the fixed `devel` marker for an unversioned build; build identities and other private build details are not returned.
+
 ## Telemetry and audit
 
 The Kernel emits its own bounded runtime logs, metrics, traces, health state, and implementation diagnostics. It never calls `audit.write/v1`.
