@@ -11,3 +11,20 @@ response:
     required: true
 
 errors: []
+
+semantics:
+  kind: query
+  effects: none
+  idempotency:
+    mode: inherent
+  retry:
+    safety: safe
+  cancellation:
+    mode: best-effort
+  completion:
+    mode: completed-before-return
+  ordering:
+    mode: none
+  data:
+    request: public
+    response: public

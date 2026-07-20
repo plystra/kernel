@@ -87,6 +87,7 @@ type Capability struct {
 	request     Schema
 	response    Schema
 	errors      []string
+	semantics   CapabilitySemantics
 	extensions  CapabilityExtensions
 }
 
@@ -94,6 +95,9 @@ func (c Capability) ID() capability.Identifier { return c.id }
 func (c Capability) Description() string       { return c.description }
 func (c Capability) Request() Schema           { return c.request }
 func (c Capability) Response() Schema          { return c.response }
+func (c Capability) Semantics() CapabilitySemantics {
+	return c.semantics
+}
 func (c Capability) Extensions() CapabilityExtensions {
 	return c.extensions
 }
@@ -114,7 +118,7 @@ func ParseCapability(data []byte) (Capability, error) {
 	}
 
 	var manifest Capability
-	var idNode, descriptionNode, requestNode, responseNode, errorsNode, extensionsNode *yaml.Node
+	var idNode, descriptionNode, requestNode, responseNode, errorsNode, semanticsNode, extensionsNode *yaml.Node
 	seen := make(map[string]struct{}, len(root.Content)/2)
 	for index := 0; index < len(root.Content); index += 2 {
 		keyNode, valueNode := root.Content[index], root.Content[index+1]
@@ -137,6 +141,8 @@ func ParseCapability(data []byte) (Capability, error) {
 			responseNode = valueNode
 		case "errors":
 			errorsNode = valueNode
+		case "semantics":
+			semanticsNode = valueNode
 		case "extensions":
 			extensionsNode = valueNode
 		default:
@@ -178,6 +184,10 @@ func ParseCapability(data []byte) (Capability, error) {
 		if err != nil {
 			return Capability{}, err
 		}
+	}
+	manifest.semantics, err = parseCapabilitySemantics(semanticsNode, manifest.request)
+	if err != nil {
+		return Capability{}, err
 	}
 	if extensionsNode != nil {
 		manifest.extensions, err = parseCapabilityExtensions(extensionsNode)

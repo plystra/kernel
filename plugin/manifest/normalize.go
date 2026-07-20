@@ -12,7 +12,46 @@ type canonicalCapabilitySchema struct {
 	Request    map[string]canonicalSchemaField `json:"request"`
 	Response   map[string]canonicalSchemaField `json:"response"`
 	Errors     []string                        `json:"errors"`
+	Semantics  canonicalCapabilitySemantics    `json:"semantics"`
 	Extensions map[string]json.RawMessage      `json:"extensions,omitempty"`
+}
+
+type canonicalCapabilitySemantics struct {
+	Kind         CapabilityKind                 `json:"kind"`
+	Effects      CapabilityEffects              `json:"effects"`
+	Idempotency  canonicalIdempotencySemantics  `json:"idempotency"`
+	Retry        canonicalRetrySemantics        `json:"retry"`
+	Cancellation canonicalCancellationSemantics `json:"cancellation"`
+	Completion   canonicalCompletionSemantics   `json:"completion"`
+	Ordering     canonicalOrderingSemantics     `json:"ordering"`
+	Data         canonicalDataSemantics         `json:"data"`
+}
+
+type canonicalIdempotencySemantics struct {
+	Mode         IdempotencyMode `json:"mode"`
+	RequestField string          `json:"request_field,omitempty"`
+}
+
+type canonicalRetrySemantics struct {
+	Safety RetrySafety `json:"safety"`
+}
+
+type canonicalCancellationSemantics struct {
+	Mode CancellationMode `json:"mode"`
+}
+
+type canonicalCompletionSemantics struct {
+	Mode CompletionMode `json:"mode"`
+}
+
+type canonicalOrderingSemantics struct {
+	Mode         OrderingMode `json:"mode"`
+	RequestField string       `json:"request_field,omitempty"`
+}
+
+type canonicalDataSemantics struct {
+	Request  DataClassification `json:"request"`
+	Response DataClassification `json:"response"`
 }
 
 type canonicalSchemaField struct {
@@ -33,6 +72,7 @@ func (c Capability) CanonicalSchemaJSON() ([]byte, error) {
 		Request:    canonicalizeSchema(c.request),
 		Response:   canonicalizeSchema(c.response),
 		Errors:     append([]string(nil), c.errors...),
+		Semantics:  canonicalizeCapabilitySemantics(c.semantics),
 		Extensions: canonicalizeCapabilityExtensions(c.extensions),
 	}
 	sort.Strings(canonical.Errors)
@@ -44,6 +84,28 @@ func (c Capability) CanonicalSchemaJSON() ([]byte, error) {
 		return nil, invalidCapability("encode canonical schema: %v", err)
 	}
 	return encoded, nil
+}
+
+func canonicalizeCapabilitySemantics(semantics CapabilitySemantics) canonicalCapabilitySemantics {
+	return canonicalCapabilitySemantics{
+		Kind:    semantics.kind,
+		Effects: semantics.effects,
+		Idempotency: canonicalIdempotencySemantics{
+			Mode:         semantics.idempotency.mode,
+			RequestField: semantics.idempotency.requestField,
+		},
+		Retry:        canonicalRetrySemantics{Safety: semantics.retry.safety},
+		Cancellation: canonicalCancellationSemantics{Mode: semantics.cancellation.mode},
+		Completion:   canonicalCompletionSemantics{Mode: semantics.completion.mode},
+		Ordering: canonicalOrderingSemantics{
+			Mode:         semantics.ordering.mode,
+			RequestField: semantics.ordering.requestField,
+		},
+		Data: canonicalDataSemantics{
+			Request:  semantics.data.request,
+			Response: semantics.data.response,
+		},
+	}
 }
 
 func canonicalizeCapabilityExtensions(extensions CapabilityExtensions) map[string]json.RawMessage {
