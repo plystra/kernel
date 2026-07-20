@@ -56,8 +56,8 @@ func TestLookupIntrinsicDefinitions(t *testing.T) {
 		response    []string
 		digest      string
 	}{
-		{id: "kernel.health/v1", description: "Reports intrinsic Kernel liveness.", response: []string{"status"}, digest: "6b1b78b7e99fcae04e27eed02fd1c9d4cfbb92cb8e07565b4fe44b03f074820c"},
-		{id: "kernel.info/v1", description: "Reports non-sensitive Kernel compatibility information.", response: []string{"assembly_api", "kernel_module", "kernel_version"}, digest: "fb8538e46264d046cc04c79ee3974293d50edbb19cc4cfd0dca9955747e70153"},
+		{id: "kernel.health/v1", description: "Reports intrinsic Kernel liveness.", response: []string{"status"}, digest: "24b3601547ebd37da37341a86699a51b2e8a2d1706662bafed0b4d6d3a1548a9"},
+		{id: "kernel.info/v1", description: "Reports non-sensitive Kernel compatibility information.", response: []string{"assembly_api", "kernel_module", "kernel_version"}, digest: "3ec0d8f2bfda17c88d8bf5e724f8612049fb0779074999f3a7c9fc9495d3695b"},
 	}
 	for _, test := range tests {
 		test := test
@@ -82,6 +82,9 @@ func TestLookupIntrinsicDefinitions(t *testing.T) {
 			}
 			if got := definition.Contract().Errors(); len(got) != 0 {
 				t.Fatalf("errors = %v", got)
+			}
+			if got := definition.Contract().Semantics().Kind(); got != manifest.CapabilityKindQuery {
+				t.Fatalf("semantics kind = %q, want query", got)
 			}
 			if got := fmt.Sprintf("%x", definition.SchemaDigest()); got != test.digest {
 				t.Fatalf("schema digest = %s", got)

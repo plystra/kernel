@@ -41,6 +41,23 @@ errors:
   - temporarily_unavailable
   - invalid_recipient
   - authentication_failed
+
+semantics:
+  kind: command
+  effects: external-write
+  idempotency:
+    mode: inherent
+  retry:
+    safety: safe
+  cancellation:
+    mode: best-effort
+  completion:
+    mode: completed-before-return
+  ordering:
+    mode: none
+  data:
+    request: confidential
+    response: confidential
 `
 
 func TestParseCapability(t *testing.T) {
@@ -55,6 +72,30 @@ func TestParseCapability(t *testing.T) {
 	}
 	if got := contract.Description(); got != "Sends an email message." {
 		t.Fatalf("Description() = %q", got)
+	}
+	if got := contract.Semantics().Kind(); got != manifest.CapabilityKindCommand {
+		t.Fatalf("Semantics().Kind() = %q, want command", got)
+	}
+	if got := contract.Semantics().Effects(); got != manifest.CapabilityEffectsExternalWrite {
+		t.Fatalf("Semantics().Effects() = %q, want external-write", got)
+	}
+	if got := contract.Semantics().Idempotency().Mode(); got != manifest.IdempotencyModeInherent {
+		t.Fatalf("Semantics().Idempotency().Mode() = %q, want inherent", got)
+	}
+	if got := contract.Semantics().Retry().Safety(); got != manifest.RetrySafetySafe {
+		t.Fatalf("Semantics().Retry().Safety() = %q, want safe", got)
+	}
+	if got := contract.Semantics().Cancellation().Mode(); got != manifest.CancellationModeBestEffort {
+		t.Fatalf("Semantics().Cancellation().Mode() = %q, want best-effort", got)
+	}
+	if got := contract.Semantics().Completion().Mode(); got != manifest.CompletionModeCompletedBeforeReturn {
+		t.Fatalf("Semantics().Completion().Mode() = %q, want completed-before-return", got)
+	}
+	if got := contract.Semantics().Ordering().Mode(); got != manifest.OrderingModeNone {
+		t.Fatalf("Semantics().Ordering().Mode() = %q, want none", got)
+	}
+	if got := contract.Semantics().Data().Request(); got != manifest.DataClassificationConfidential {
+		t.Fatalf("Semantics().Data().Request() = %q, want confidential", got)
 	}
 	wantRequest := []string{"attempts", "metadata", "ratio", "subject", "to", "urgent"}
 	if got := schemaFieldNames(contract.Request()); !reflect.DeepEqual(got, wantRequest) {
@@ -91,6 +132,16 @@ func TestParseCapabilityExtensions(t *testing.T) {
 	t.Parallel()
 
 	contract, err := manifest.ParseCapability([]byte(`id: order.cancel/v1
+
+semantics:
+  kind: command
+  effects: external-write
+  idempotency: {mode: inherent}
+  retry: {safety: safe}
+  cancellation: {mode: best-effort}
+  completion: {mode: completed-before-return}
+  ordering: {mode: none}
+  data: {request: confidential, response: confidential}
 extensions:
   rate-limit: 5
   telemetry: [null, true, 1, 1.5, sample]
@@ -144,11 +195,11 @@ extensions:
 func TestParseCapabilityAllowsEmptySchemas(t *testing.T) {
 	t.Parallel()
 
-	contract, err := manifest.ParseCapability([]byte("id: kernel.health/v1\nrequest: {}\nresponse: {}\nerrors: []\nextensions: {}\n"))
+	contract, err := manifest.ParseCapability([]byte("id: kernel.health/v1\nrequest: {}\nresponse: {}\nerrors: []\nsemantics:\n  kind: query\n  effects: none\n  idempotency: {mode: none}\n  retry: {safety: never}\n  cancellation: {mode: unsupported}\n  completion: {mode: completed-before-return}\n  ordering: {mode: none}\n  data: {request: public, response: public}\nextensions: {}\n"))
 	if err != nil {
 		t.Fatalf("ParseCapability: %v", err)
 	}
-	if contract.ID().String() != "kernel.health/v1" || len(contract.Request().Fields()) != 0 || len(contract.Response().Fields()) != 0 || len(contract.Errors()) != 0 || len(contract.Extensions().Values()) != 0 {
+	if contract.ID().String() != "kernel.health/v1" || len(contract.Request().Fields()) != 0 || len(contract.Response().Fields()) != 0 || len(contract.Errors()) != 0 || len(contract.Extensions().Values()) != 0 || contract.Semantics().Kind() != manifest.CapabilityKindQuery {
 		t.Fatalf("empty capability = %#v", contract)
 	}
 }
@@ -161,6 +212,15 @@ request:
   integer_value: {type: integer, enum: [-1, 0, 2]}
   number_value: {type: number, enum: [1, 1.5]}
   boolean_value: {type: boolean, enum: [true, false]}
+semantics:
+  kind: query
+  effects: none
+  idempotency: {mode: none}
+  retry: {safety: never}
+  cancellation: {mode: unsupported}
+  completion: {mode: completed-before-return}
+  ordering: {mode: none}
+  data: {request: public, response: public}
 `))
 	if err != nil {
 		t.Fatalf("ParseCapability: %v", err)
@@ -199,6 +259,7 @@ func TestParseCapabilityRejectsInvalidDeclarations(t *testing.T) {
 		{name: "missing id", input: "request: {}\n"},
 		{name: "non string id", input: "id: 1\n"},
 		{name: "invalid id", input: "id: email.send\n"},
+		{name: "missing semantics", input: "id: email.send/v1\n"},
 		{name: "non string description", input: "id: email.send/v1\ndescription: 1\n"},
 		{name: "extensions not mapping", input: "id: email.send/v1\nextensions: []\n"},
 		{name: "non string extension namespace", input: "id: email.send/v1\nextensions:\n  1: true\n"},

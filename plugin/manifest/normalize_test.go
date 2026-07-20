@@ -66,6 +66,15 @@ request:
   attempts: {type: integer}
 description: Provider-specific wording that is not part of the wire schema.
 id: email.send/v1
+semantics:
+  kind: command
+  effects: external-write
+  idempotency: {mode: inherent}
+  retry: {safety: safe}
+  cancellation: {mode: best-effort}
+  completion: {mode: completed-before-return}
+  ordering: {mode: none}
+  data: {request: confidential, response: confidential}
 `))
 	if err != nil {
 		t.Fatalf("ParseCapability(second): %v", err)
@@ -98,6 +107,15 @@ func TestCapabilityCanonicalSchemaNormalizesExtensions(t *testing.T) {
 	t.Parallel()
 
 	first, err := manifest.ParseCapability([]byte(`id: order.cancel/v1
+semantics:
+  kind: command
+  effects: external-write
+  idempotency: {mode: inherent}
+  retry: {safety: safe}
+  cancellation: {mode: best-effort}
+  completion: {mode: completed-before-return}
+  ordering: {mode: none}
+  data: {request: confidential, response: confidential}
 extensions:
   authz:
     resource:
@@ -114,6 +132,15 @@ extensions:
   authn: {authenticated: true}
   authz: {permission: order.cancel, resource: {kind: order, required: true}}
 id: order.cancel/v1
+semantics:
+  kind: command
+  effects: external-write
+  idempotency: {mode: inherent}
+  retry: {safety: safe}
+  cancellation: {mode: best-effort}
+  completion: {mode: completed-before-return}
+  ordering: {mode: none}
+  data: {request: confidential, response: confidential}
 `))
 	if err != nil {
 		t.Fatalf("ParseCapability(second): %v", err)
@@ -127,7 +154,7 @@ id: order.cancel/v1
 	if err != nil {
 		t.Fatalf("CanonicalSchemaJSON(second): %v", err)
 	}
-	want := `{"id":"order.cancel/v1","request":{},"response":{},"errors":[],"extensions":{"authn":{"authenticated":true},"authz":{"permission":"order.cancel","resource":{"kind":"order","required":true}}}}`
+	want := `{"id":"order.cancel/v1","request":{},"response":{},"errors":[],"semantics":{"kind":"command","effects":"external-write","idempotency":{"mode":"inherent"},"retry":{"safety":"safe"},"cancellation":{"mode":"best-effort"},"completion":{"mode":"completed-before-return"},"ordering":{"mode":"none"},"data":{"request":"confidential","response":"confidential"}},"extensions":{"authn":{"authenticated":true},"authz":{"permission":"order.cancel","resource":{"kind":"order","required":true}}}}`
 	if string(firstJSON) != want || !bytes.Equal(firstJSON, secondJSON) {
 		t.Fatalf("canonical extensions:\nfirst:  %s\nsecond: %s\nwant:   %s", firstJSON, secondJSON, want)
 	}
@@ -144,6 +171,15 @@ id: order.cancel/v1
 		t.Fatalf("extension digests = %x and %x, want %x", firstDigest, secondDigest, wantDigest)
 	}
 	changed, err := manifest.ParseCapability([]byte(`id: order.cancel/v1
+semantics:
+  kind: command
+  effects: external-write
+  idempotency: {mode: inherent}
+  retry: {safety: safe}
+  cancellation: {mode: best-effort}
+  completion: {mode: completed-before-return}
+  ordering: {mode: none}
+  data: {request: confidential, response: confidential}
 extensions:
   authn: {authenticated: false}
   authz: {permission: order.cancel, resource: {kind: order, required: true}}
@@ -159,11 +195,11 @@ extensions:
 		t.Fatalf("changed extension value preserved digest %x", changedDigest)
 	}
 
-	withoutExtensions, err := manifest.ParseCapability([]byte("id: kernel.health/v1\n"))
+	withoutExtensions, err := manifest.ParseCapability([]byte("id: kernel.health/v1\nsemantics:\n  kind: query\n  effects: none\n  idempotency: {mode: none}\n  retry: {safety: never}\n  cancellation: {mode: unsupported}\n  completion: {mode: completed-before-return}\n  ordering: {mode: none}\n  data: {request: public, response: public}\n"))
 	if err != nil {
 		t.Fatalf("ParseCapability(withoutExtensions): %v", err)
 	}
-	emptyExtensions, err := manifest.ParseCapability([]byte("id: kernel.health/v1\nextensions: {}\n"))
+	emptyExtensions, err := manifest.ParseCapability([]byte("id: kernel.health/v1\nsemantics:\n  kind: query\n  effects: none\n  idempotency: {mode: none}\n  retry: {safety: never}\n  cancellation: {mode: unsupported}\n  completion: {mode: completed-before-return}\n  ordering: {mode: none}\n  data: {request: public, response: public}\nextensions: {}\n"))
 	if err != nil {
 		t.Fatalf("ParseCapability(emptyExtensions): %v", err)
 	}
@@ -194,7 +230,7 @@ extensions:
 func TestCapabilityCanonicalSchemaPreservesSemanticDifferences(t *testing.T) {
 	t.Parallel()
 
-	baseline, err := manifest.ParseCapability([]byte("id: example.check/v1\nrequest:\n  value: {type: string}\nerrors: [invalid_value]\n"))
+	baseline, err := manifest.ParseCapability([]byte("id: example.check/v1\nrequest:\n  value: {type: string}\nerrors: [invalid_value]\nsemantics:\n  kind: query\n  effects: none\n  idempotency: {mode: none}\n  retry: {safety: never}\n  cancellation: {mode: unsupported}\n  completion: {mode: completed-before-return}\n  ordering: {mode: none}\n  data: {request: public, response: public}\n"))
 	if err != nil {
 		t.Fatalf("ParseCapability(baseline): %v", err)
 	}
@@ -210,13 +246,14 @@ func TestCapabilityCanonicalSchemaPreservesSemanticDifferences(t *testing.T) {
 		name  string
 		input string
 	}{
-		{name: "identity", input: "id: example.check/v2\nrequest:\n  value: {type: string}\nerrors: [invalid_value]\n"},
-		{name: "type", input: "id: example.check/v1\nrequest:\n  value: {type: integer}\nerrors: [invalid_value]\n"},
-		{name: "required", input: "id: example.check/v1\nrequest:\n  value: {type: string, required: true}\nerrors: [invalid_value]\n"},
-		{name: "enum", input: "id: example.check/v1\nrequest:\n  value: {type: string, enum: [one]}\nerrors: [invalid_value]\n"},
-		{name: "error", input: "id: example.check/v1\nrequest:\n  value: {type: string}\nerrors: []\n"},
-		{name: "extension namespace", input: "id: example.check/v1\nrequest:\n  value: {type: string}\nerrors: [invalid_value]\nextensions: {authn: {authenticated: true}}\n"},
-		{name: "extension value", input: "id: example.check/v1\nrequest:\n  value: {type: string}\nerrors: [invalid_value]\nextensions: {authz: {permission: example.read}}\n"},
+		{name: "identity", input: "id: example.check/v2\nrequest:\n  value: {type: string}\nerrors: [invalid_value]\nsemantics:\n  kind: query\n  effects: none\n  idempotency: {mode: none}\n  retry: {safety: never}\n  cancellation: {mode: unsupported}\n  completion: {mode: completed-before-return}\n  ordering: {mode: none}\n  data: {request: public, response: public}\n"},
+		{name: "type", input: "id: example.check/v1\nrequest:\n  value: {type: integer}\nerrors: [invalid_value]\nsemantics:\n  kind: query\n  effects: none\n  idempotency: {mode: none}\n  retry: {safety: never}\n  cancellation: {mode: unsupported}\n  completion: {mode: completed-before-return}\n  ordering: {mode: none}\n  data: {request: public, response: public}\n"},
+		{name: "required", input: "id: example.check/v1\nrequest:\n  value: {type: string, required: true}\nerrors: [invalid_value]\nsemantics:\n  kind: query\n  effects: none\n  idempotency: {mode: none}\n  retry: {safety: never}\n  cancellation: {mode: unsupported}\n  completion: {mode: completed-before-return}\n  ordering: {mode: none}\n  data: {request: public, response: public}\n"},
+		{name: "enum", input: "id: example.check/v1\nrequest:\n  value: {type: string, enum: [one]}\nerrors: [invalid_value]\nsemantics:\n  kind: query\n  effects: none\n  idempotency: {mode: none}\n  retry: {safety: never}\n  cancellation: {mode: unsupported}\n  completion: {mode: completed-before-return}\n  ordering: {mode: none}\n  data: {request: public, response: public}\n"},
+		{name: "error", input: "id: example.check/v1\nrequest:\n  value: {type: string}\nerrors: []\nsemantics:\n  kind: query\n  effects: none\n  idempotency: {mode: none}\n  retry: {safety: never}\n  cancellation: {mode: unsupported}\n  completion: {mode: completed-before-return}\n  ordering: {mode: none}\n  data: {request: public, response: public}\n"},
+		{name: "typed semantics", input: "id: example.check/v1\nrequest:\n  value: {type: string}\nerrors: [invalid_value]\nsemantics:\n  kind: query\n  effects: none\n  idempotency: {mode: none}\n  retry: {safety: never}\n  cancellation: {mode: unsupported}\n  completion: {mode: completed-before-return}\n  ordering: {mode: none}\n  data: {request: internal, response: public}\n"},
+		{name: "extension namespace", input: "id: example.check/v1\nrequest:\n  value: {type: string}\nerrors: [invalid_value]\nextensions: {authn: {authenticated: true}}\nsemantics:\n  kind: query\n  effects: none\n  idempotency: {mode: none}\n  retry: {safety: never}\n  cancellation: {mode: unsupported}\n  completion: {mode: completed-before-return}\n  ordering: {mode: none}\n  data: {request: public, response: public}\n"},
+		{name: "extension value", input: "id: example.check/v1\nrequest:\n  value: {type: string}\nerrors: [invalid_value]\nextensions: {authz: {permission: example.read}}\nsemantics:\n  kind: query\n  effects: none\n  idempotency: {mode: none}\n  retry: {safety: never}\n  cancellation: {mode: unsupported}\n  completion: {mode: completed-before-return}\n  ordering: {mode: none}\n  data: {request: public, response: public}\n"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
