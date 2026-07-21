@@ -38,17 +38,19 @@ func ParseSchemaType(value string) (SchemaType, error) {
 
 // SchemaField is one immutable validated request or response field.
 type SchemaField struct {
-	name       string
-	schemaType SchemaType
-	required   bool
-	items      SchemaType
-	enumJSON   [][]byte
+	name        string
+	schemaType  SchemaType
+	required    bool
+	items       SchemaType
+	enumJSON    [][]byte
+	constraints FieldConstraints
 }
 
-func (f SchemaField) Name() string      { return f.name }
-func (f SchemaField) Type() SchemaType  { return f.schemaType }
-func (f SchemaField) Required() bool    { return f.required }
-func (f SchemaField) Items() SchemaType { return f.items }
+func (f SchemaField) Name() string                  { return f.name }
+func (f SchemaField) Type() SchemaType              { return f.schemaType }
+func (f SchemaField) Required() bool                { return f.required }
+func (f SchemaField) Items() SchemaType             { return f.items }
+func (f SchemaField) Constraints() FieldConstraints { return f.constraints }
 
 // EnumJSON returns defensive copies of the field's canonical JSON enum values.
 func (f SchemaField) EnumJSON() [][]byte {
@@ -228,7 +230,7 @@ func parseSchemaField(path, name string, node *yaml.Node) (SchemaField, error) {
 	if node == nil || node.Kind != yaml.MappingNode {
 		return SchemaField{}, invalidCapability("%s must be a mapping", path)
 	}
-	var typeNode, requiredNode, itemsNode, enumNode *yaml.Node
+	var typeNode, requiredNode, itemsNode, enumNode, constraintsNode *yaml.Node
 	seen := make(map[string]struct{}, len(node.Content)/2)
 	for index := 0; index < len(node.Content); index += 2 {
 		keyNode, valueNode := node.Content[index], node.Content[index+1]
@@ -249,6 +251,8 @@ func parseSchemaField(path, name string, node *yaml.Node) (SchemaField, error) {
 			itemsNode = valueNode
 		case "enum":
 			enumNode = valueNode
+		case "constraints":
+			constraintsNode = valueNode
 		default:
 			return SchemaField{}, invalidCapability("%s contains unknown key %q", path, key)
 		}
@@ -307,6 +311,10 @@ func parseSchemaField(path, name string, node *yaml.Node) (SchemaField, error) {
 			seenValues[key] = struct{}{}
 			field.enumJSON = append(field.enumJSON, encoded)
 		}
+	}
+	field.constraints, err = parseFieldConstraints(path+".constraints", constraintsNode, schemaType)
+	if err != nil {
+		return SchemaField{}, err
 	}
 	return field, nil
 }

@@ -55,10 +55,21 @@ type canonicalDataSemantics struct {
 }
 
 type canonicalSchemaField struct {
-	Type     SchemaType        `json:"type"`
-	Items    SchemaType        `json:"items,omitempty"`
-	Required bool              `json:"required,omitempty"`
-	Enum     []json.RawMessage `json:"enum,omitempty"`
+	Type        SchemaType                 `json:"type"`
+	Items       SchemaType                 `json:"items,omitempty"`
+	Required    bool                       `json:"required,omitempty"`
+	Enum        []json.RawMessage          `json:"enum,omitempty"`
+	Constraints *canonicalFieldConstraints `json:"constraints,omitempty"`
+}
+
+type canonicalFieldConstraints struct {
+	MinLength *uint32         `json:"min_length,omitempty"`
+	MaxLength *uint32         `json:"max_length,omitempty"`
+	Pattern   *string         `json:"pattern,omitempty"`
+	Minimum   json.RawMessage `json:"minimum,omitempty"`
+	Maximum   json.RawMessage `json:"maximum,omitempty"`
+	MinItems  *uint32         `json:"min_items,omitempty"`
+	MaxItems  *uint32         `json:"max_items,omitempty"`
 }
 
 // CanonicalSchemaJSON returns the deterministic semantic wire schema and
@@ -140,11 +151,41 @@ func canonicalizeSchema(schema Schema) map[string]canonicalSchemaField {
 			canonicalEnum[index] = json.RawMessage(enum[index])
 		}
 		canonical[field.name] = canonicalSchemaField{
-			Type:     field.schemaType,
-			Items:    field.items,
-			Required: field.required,
-			Enum:     canonicalEnum,
+			Type:        field.schemaType,
+			Items:       field.items,
+			Required:    field.required,
+			Enum:        canonicalEnum,
+			Constraints: canonicalizeFieldConstraints(field.constraints),
 		}
+	}
+	return canonical
+}
+
+func canonicalizeFieldConstraints(constraints FieldConstraints) *canonicalFieldConstraints {
+	if constraints.Empty() {
+		return nil
+	}
+	canonical := &canonicalFieldConstraints{}
+	if value, ok := constraints.MinLength(); ok {
+		canonical.MinLength = &value
+	}
+	if value, ok := constraints.MaxLength(); ok {
+		canonical.MaxLength = &value
+	}
+	if value, ok := constraints.Pattern(); ok {
+		canonical.Pattern = &value
+	}
+	if value, ok := constraints.Minimum(); ok {
+		canonical.Minimum = json.RawMessage(value.JSON())
+	}
+	if value, ok := constraints.Maximum(); ok {
+		canonical.Maximum = json.RawMessage(value.JSON())
+	}
+	if value, ok := constraints.MinItems(); ok {
+		canonical.MinItems = &value
+	}
+	if value, ok := constraints.MaxItems(); ok {
+		canonical.MaxItems = &value
 	}
 	return canonical
 }
