@@ -105,6 +105,128 @@ partition: {type: integer, required: true}`,
 	}
 }
 
+func TestParseCapabilitySemanticsSupportsClosedVocabulary(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name             string
+		request          string
+		semantics        string
+		kind             manifest.CapabilityKind
+		effects          manifest.CapabilityEffects
+		idempotency      manifest.IdempotencyMode
+		idempotencyField string
+		retry            manifest.RetrySafety
+		cancellation     manifest.CancellationMode
+		completion       manifest.CompletionMode
+		ordering         manifest.OrderingMode
+		orderingField    string
+		requestData      manifest.DataClassification
+		responseData     manifest.DataClassification
+	}{
+		{
+			name:         "query",
+			semantics:    validQuerySemantics,
+			kind:         manifest.CapabilityKindQuery,
+			effects:      manifest.CapabilityEffectsNone,
+			idempotency:  manifest.IdempotencyModeInherent,
+			retry:        manifest.RetrySafetySafe,
+			cancellation: manifest.CancellationModeBestEffort,
+			completion:   manifest.CompletionModeCompletedBeforeReturn,
+			ordering:     manifest.OrderingModeNone,
+			requestData:  manifest.DataClassificationPublic,
+			responseData: manifest.DataClassificationInternal,
+		},
+		{
+			name: "local command",
+			semantics: `kind: command
+effects: local
+idempotency: {mode: none}
+retry: {safety: never}
+cancellation: {mode: unsupported}
+completion: {mode: accepted-for-processing}
+ordering: {mode: global}
+data: {request: internal, response: public}`,
+			kind:         manifest.CapabilityKindCommand,
+			effects:      manifest.CapabilityEffectsLocal,
+			idempotency:  manifest.IdempotencyModeNone,
+			retry:        manifest.RetrySafetyNever,
+			cancellation: manifest.CancellationModeUnsupported,
+			completion:   manifest.CompletionModeAcceptedForProcessing,
+			ordering:     manifest.OrderingModeGlobal,
+			requestData:  manifest.DataClassificationInternal,
+			responseData: manifest.DataClassificationPublic,
+		},
+		{
+			name:             "keyed external-write command",
+			request:          "idempotency_key: {type: string, required: true}\npartition: {type: integer, required: true}",
+			semantics:        validCommandSemantics,
+			kind:             manifest.CapabilityKindCommand,
+			effects:          manifest.CapabilityEffectsExternalWrite,
+			idempotency:      manifest.IdempotencyModeKeyed,
+			idempotencyField: "idempotency_key",
+			retry:            manifest.RetrySafetyRequiresIdempotencyKey,
+			cancellation:     manifest.CancellationModeBestEffort,
+			completion:       manifest.CompletionModeCompletedBeforeReturn,
+			ordering:         manifest.OrderingModePerKey,
+			orderingField:    "partition",
+			requestData:      manifest.DataClassificationConfidential,
+			responseData:     manifest.DataClassificationRestricted,
+		},
+		{
+			name:         "external event",
+			semantics:    strings.Replace(validEventSemantics, "data: {request: internal, response: internal}", "data: {request: restricted, response: confidential}", 1),
+			kind:         manifest.CapabilityKindEvent,
+			effects:      manifest.CapabilityEffectsExternal,
+			idempotency:  manifest.IdempotencyModeInherent,
+			retry:        manifest.RetrySafetySafe,
+			cancellation: manifest.CancellationModeBestEffort,
+			completion:   manifest.CompletionModeAcceptedForProcessing,
+			ordering:     manifest.OrderingModeGlobal,
+			requestData:  manifest.DataClassificationRestricted,
+			responseData: manifest.DataClassificationConfidential,
+		},
+		{
+			name:         "stream",
+			semantics:    validStreamSemantics,
+			kind:         manifest.CapabilityKindStream,
+			effects:      manifest.CapabilityEffectsExternal,
+			idempotency:  manifest.IdempotencyModeNone,
+			retry:        manifest.RetrySafetyNever,
+			cancellation: manifest.CancellationModeUnsupported,
+			completion:   manifest.CompletionModeAcceptedForProcessing,
+			ordering:     manifest.OrderingModeNone,
+			requestData:  manifest.DataClassificationRestricted,
+			responseData: manifest.DataClassificationRestricted,
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			contract, err := manifest.ParseCapability([]byte(capabilityWithSemantics(test.request, test.semantics)))
+			if err != nil {
+				t.Fatalf("ParseCapability: %v", err)
+			}
+			semantics := contract.Semantics()
+			if semantics.Kind() != test.kind ||
+				semantics.Effects() != test.effects ||
+				semantics.Idempotency().Mode() != test.idempotency ||
+				semantics.Idempotency().RequestField() != test.idempotencyField ||
+				semantics.Retry().Safety() != test.retry ||
+				semantics.Cancellation().Mode() != test.cancellation ||
+				semantics.Completion().Mode() != test.completion ||
+				semantics.Ordering().Mode() != test.ordering ||
+				semantics.Ordering().RequestField() != test.orderingField ||
+				semantics.Data().Request() != test.requestData ||
+				semantics.Data().Response() != test.responseData {
+				t.Fatalf("semantics = %#v", semantics)
+			}
+		})
+	}
+}
+
 func TestParseCapabilityRejectsInvalidSemantics(t *testing.T) {
 	t.Parallel()
 
