@@ -100,8 +100,64 @@ Generated assembly declares the exact Kernel assembly API version it targets. Th
 
 ## Development
 
+Run validation from the Kernel module root. Set `GOWORK=off` once for the
+PowerShell session so every command proves that the module is independent of a
+workspace file:
+
 ```powershell
-go test ./...
-go test -race ./...
+$env:GOWORK = "off"
+
+go test ./... -count=1
+go test -race ./... -count=1
 go vet ./...
+go mod verify
 ```
+
+Go runs one fuzz target per command. The following PowerShell discovers every
+committed `Fuzz...` function, derives its package, and runs each target with a
+10-second local bound:
+
+```powershell
+$fuzzTargets = Get-ChildItem -Recurse -File -Filter "*_test.go" |
+    Select-String -Pattern '^func (Fuzz[A-Za-z0-9_]+)\(f \*testing\.F\)' |
+    ForEach-Object {
+        $relativePackage = [IO.Path]::GetRelativePath(
+            (Get-Location).Path,
+            (Split-Path -Parent $_.Path)
+        ).Replace('\', '/')
+
+        [pscustomobject]@{
+            Package = if ($relativePackage -eq '.') { '.' } else { "./$relativePackage" }
+            Target  = $_.Matches[0].Groups[1].Value
+        }
+    } |
+    Sort-Object Package, Target -Unique
+
+if (-not $fuzzTargets) {
+    throw "No fuzz targets found."
+}
+
+foreach ($fuzz in $fuzzTargets) {
+    go test $fuzz.Package -run '^$' -fuzz ('^{0}$' -f $fuzz.Target) -fuzztime 10s
+    if ($LASTEXITCODE -ne 0) {
+        throw "Fuzz target failed: $($fuzz.Package) $($fuzz.Target)"
+    }
+}
+```
+
+The 10-second duration is a reproducible bounded local validation choice, not
+a universal sufficiency threshold. Increase `-fuzztime` for longer campaigns.
+
+Run the three committed intrinsic Kernel benchmarks separately so their
+allocation and timing results remain attributable:
+
+```powershell
+go test ./invocation -run '^$' -bench '^BenchmarkCapabilityLookup$' -benchmem -count=5
+go test ./invocation -run '^$' -bench '^BenchmarkRegistryConcurrentRead$' -benchmem -count=5
+go test ./invocation -run '^$' -bench '^BenchmarkKernelCanonicalDispatch$' -benchmem -count=5
+```
+
+Benchmark results depend on the machine and Go toolchain. Record that context
+with local evidence and compare applicable results with the binding Kernel
+runtime performance requirements; do not treat one machine's numbers as
+universal expectations.
