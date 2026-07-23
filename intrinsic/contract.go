@@ -9,9 +9,6 @@ import (
 const (
 	// ModulePath is the canonical Go Module that owns every intrinsic endpoint.
 	ModulePath = "github.com/plystra/kernel"
-	// ProviderPackage is the canonical implementation package recorded in
-	// intrinsic runtime bindings.
-	ProviderPackage = ModulePath + "/intrinsic"
 )
 
 var (

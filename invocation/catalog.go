@@ -4,11 +4,12 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/token"
 	"sort"
 	"strings"
 
 	"github.com/plystra/kernel/capability"
-	"github.com/plystra/kernel/plugin"
 	"golang.org/x/mod/module"
 )
 
@@ -23,40 +24,41 @@ var (
 	ErrDuplicateBinding = errors.New("duplicate resolved capability binding")
 )
 
-// ProviderKind distinguishes Kernel-owned endpoints from already-selected
-// plugin endpoints. It does not perform or influence provider selection.
-type ProviderKind string
+// BindingKind distinguishes Kernel-owned intrinsic endpoints from ordinary
+// already-selected Implementation endpoints. It does not perform or influence
+// Implementation selection.
+type BindingKind string
 
 const (
-	ProviderKindKernel ProviderKind = "kernel"
-	ProviderKindPlugin ProviderKind = "plugin"
+	BindingKindIntrinsic      BindingKind = "intrinsic"
+	BindingKindImplementation BindingKind = "implementation"
 )
 
-// String returns the stable provider-kind representation.
-func (k ProviderKind) String() string {
+// String returns the stable binding-kind representation.
+func (k BindingKind) String() string {
 	if !k.Valid() {
 		return ""
 	}
 	return string(k)
 }
 
-// Valid reports whether the kind identifies one supported provider owner.
-func (k ProviderKind) Valid() bool {
-	return k == ProviderKindKernel || k == ProviderKindPlugin
+// Valid reports whether the kind identifies one supported binding owner.
+func (k BindingKind) Valid() bool {
+	return k == BindingKindIntrinsic || k == BindingKindImplementation
 }
 
-// SelectionReason records why generated resolution chose one implementation.
-// It is immutable runtime provenance and never performs provider selection.
+// SelectionReason records why generated resolution chose one Implementation.
+// It is immutable runtime provenance and never performs selection.
 type SelectionReason string
 
 const (
 	// SelectionReasonIntrinsic identifies a Kernel-owned intrinsic endpoint.
 	SelectionReasonIntrinsic SelectionReason = "intrinsic"
-	// SelectionReasonSoleProvider identifies the only compatible ordinary
-	// provider visible for a required Capability.
-	SelectionReasonSoleProvider SelectionReason = "sole-provider"
-	// SelectionReasonExplicit identifies an ordinary provider selected by an
-	// explicit application capabilities.use declaration.
+	// SelectionReasonUniqueCompatible identifies the only compatible ordinary
+	// Implementation visible for a required Interface.
+	SelectionReasonUniqueCompatible SelectionReason = "unique-compatible"
+	// SelectionReasonExplicit identifies an ordinary Implementation selected by
+	// an explicit application interfaces.use declaration.
 	SelectionReasonExplicit SelectionReason = "explicit"
 )
 
@@ -70,42 +72,41 @@ func (r SelectionReason) String() string {
 
 // Valid reports whether the reason is one supported resolved selection.
 func (r SelectionReason) Valid() bool {
-	return r == SelectionReasonIntrinsic || r == SelectionReasonSoleProvider || r == SelectionReasonExplicit
+	return r == SelectionReasonIntrinsic || r == SelectionReasonUniqueCompatible || r == SelectionReasonExplicit
 }
 
 // BindingOptions is the generated, already-resolved metadata for one endpoint.
 type BindingOptions struct {
-	ProviderKind    ProviderKind
-	ProviderID      plugin.ID
-	ProviderPackage string
-	ProviderBuild   ModuleBuild
+	Kind            BindingKind
+	Constructor     string
+	ModuleBuild     ModuleBuild
 	SelectionReason SelectionReason
-	SchemaDigest    [sha256.Size]byte
+	ContractDigest  [sha256.Size]byte
 }
 
-// Binding joins one selected provider, its module provenance, and
-// schema digest to its executable endpoint.
+// Binding joins one selected Implementation constructor, its module
+// provenance, and contract digest to its executable endpoint. Intrinsic
+// bindings deliberately have no constructor symbol.
 type Binding struct {
-	providerKind    ProviderKind
-	providerID      plugin.ID
-	providerPackage string
-	providerBuild   ModuleBuild
+	kind            BindingKind
+	constructor     string
+	moduleBuild     ModuleBuild
 	selectionReason SelectionReason
-	schemaDigest    [sha256.Size]byte
+	contractDigest  [sha256.Size]byte
 	endpoint        Endpoint
 }
 
-// NewBinding validates one already-resolved executable endpoint. A plugin
-// binding requires its concrete Plugin ID; a Kernel binding must not have one.
-// Every binding requires immutable module build provenance for diagnostics.
+// NewBinding validates one already-resolved executable endpoint. An ordinary
+// binding requires the exact selected constructor symbol; an intrinsic binding
+// must not have one. Every binding requires immutable module build provenance
+// for diagnostics.
 func NewBinding(options BindingOptions, endpoint Endpoint) (Binding, error) {
 	binding := Binding{
-		providerKind:    options.ProviderKind,
-		providerID:      options.ProviderID,
-		providerPackage: options.ProviderPackage,
-		providerBuild:   options.ProviderBuild,
+		kind:            options.Kind,
+		constructor:     options.Constructor,
+		moduleBuild:     options.ModuleBuild,
 		selectionReason: options.SelectionReason,
-		schemaDigest:    options.SchemaDigest,
+		contractDigest:  options.ContractDigest,
 		endpoint:        endpoint,
 	}
 	if !binding.valid() {
@@ -114,8 +115,8 @@ func NewBinding(options BindingOptions, endpoint Endpoint) (Binding, error) {
 	return binding, nil
 }
 
-// Capability returns the exact provider-independent capability identity.
-func (b Binding) Capability() capability.Identifier {
+// InterfaceID returns the exact provider-independent Interface identity.
+func (b Binding) InterfaceID() capability.Identifier {
 	if !b.valid() {
 		return capability.Identifier{}
 	}
@@ -130,39 +131,30 @@ func (b Binding) Definition() capability.Definition {
 	return b.endpoint.Definition()
 }
 
-// ProviderKind returns whether the selected endpoint belongs to the Kernel or
-// a plugin.
-func (b Binding) ProviderKind() ProviderKind {
+// Kind returns whether the selected endpoint is intrinsic or belongs to one
+// ordinary Implementation constructor.
+func (b Binding) Kind() BindingKind {
 	if !b.valid() {
 		return ""
 	}
-	return b.providerKind
+	return b.kind
 }
 
-// ProviderID returns the selected concrete Plugin ID, or the zero value for a
-// Kernel-owned endpoint.
-func (b Binding) ProviderID() plugin.ID {
-	if !b.valid() {
-		return plugin.ID{}
-	}
-	return b.providerID
-}
-
-// ProviderPackage returns the canonical Go package containing the selected
-// implementation constructor and provider type.
-func (b Binding) ProviderPackage() string {
+// Constructor returns the exact selected fully qualified constructor symbol,
+// or an empty string for a Kernel-owned intrinsic endpoint.
+func (b Binding) Constructor() string {
 	if !b.valid() {
 		return ""
 	}
-	return b.providerPackage
+	return b.constructor
 }
 
-// ProviderBuild returns the selected implementation's Go module provenance.
-func (b Binding) ProviderBuild() ModuleBuild {
+// ModuleBuild returns the selected Implementation's Go Module provenance.
+func (b Binding) ModuleBuild() ModuleBuild {
 	if !b.valid() {
 		return ModuleBuild{}
 	}
-	return b.providerBuild
+	return b.moduleBuild
 }
 
 // SelectionReason returns why generated resolution chose this implementation.
@@ -173,32 +165,36 @@ func (b Binding) SelectionReason() SelectionReason {
 	return b.selectionReason
 }
 
-// SchemaDigest returns the selected capability's canonical SHA-256 schema
+// ContractDigest returns the selected Interface's canonical SHA-256 contract
 // digest.
-func (b Binding) SchemaDigest() [sha256.Size]byte {
+func (b Binding) ContractDigest() [sha256.Size]byte {
 	if !b.valid() {
 		return [sha256.Size]byte{}
 	}
-	return b.schemaDigest
+	return b.contractDigest
 }
 
 func (b Binding) valid() bool {
-	if !b.endpoint.valid() || !b.providerBuild.Valid() || !validProviderPackage(b.providerBuild.ModulePath(), b.providerPackage) ||
-		!b.selectionReason.Valid() || b.schemaDigest == [sha256.Size]byte{} {
+	if !b.endpoint.valid() || !b.moduleBuild.Valid() || !b.selectionReason.Valid() || b.contractDigest == [sha256.Size]byte{} {
 		return false
 	}
-	switch b.providerKind {
-	case ProviderKindKernel:
-		return b.providerID.String() == "" && b.selectionReason == SelectionReasonIntrinsic
-	case ProviderKindPlugin:
-		return b.providerID.String() != "" && b.selectionReason != SelectionReasonIntrinsic
+	switch b.kind {
+	case BindingKindIntrinsic:
+		return b.constructor == "" && b.selectionReason == SelectionReasonIntrinsic
+	case BindingKindImplementation:
+		return validConstructorSymbol(b.moduleBuild.ModulePath(), b.constructor) && b.selectionReason != SelectionReasonIntrinsic
 	default:
 		return false
 	}
 }
 
-func validProviderPackage(modulePath, packagePath string) bool {
-	if module.CheckImportPath(packagePath) != nil {
+func validConstructorSymbol(modulePath, symbol string) bool {
+	separator := strings.LastIndexByte(symbol, '.')
+	if separator <= 0 || separator == len(symbol)-1 {
+		return false
+	}
+	packagePath, functionName := symbol[:separator], symbol[separator+1:]
+	if module.CheckImportPath(packagePath) != nil || !token.IsIdentifier(functionName) || !ast.IsExported(functionName) {
 		return false
 	}
 	return packagePath == modulePath || strings.HasPrefix(packagePath, modulePath+"/")
@@ -224,7 +220,7 @@ func NewCatalog(bindings []Binding) (Catalog, error) {
 		if !binding.valid() {
 			return Catalog{}, fmt.Errorf("%w: binding %d: %w", ErrInvalidCatalog, index, ErrInvalidBinding)
 		}
-		identifier := binding.Capability()
+		identifier := binding.InterfaceID()
 		if _, duplicate := entries[identifier]; duplicate {
 			return Catalog{}, fmt.Errorf("%w: %w for %s", ErrInvalidCatalog, ErrDuplicateBinding, identifier)
 		}
@@ -232,7 +228,7 @@ func NewCatalog(bindings []Binding) (Catalog, error) {
 		ordered[index] = binding
 	}
 	sort.Slice(ordered, func(left, right int) bool {
-		return ordered[left].Capability().String() < ordered[right].Capability().String()
+		return ordered[left].InterfaceID().String() < ordered[right].InterfaceID().String()
 	})
 	return Catalog{state: &catalogState{entries: entries, ordered: ordered}}, nil
 }

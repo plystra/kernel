@@ -47,7 +47,7 @@ func TestDispatcherPublishesImmutableCatalogOnce(t *testing.T) {
 		t.Fatalf("snapshot: %v", err)
 	}
 	binding, exists := state.entries[identifier]
-	if !exists || binding.Capability() != identifier || len(state.ordered) != 1 || state.ordered[0].Capability() != identifier {
+	if !exists || binding.InterfaceID() != identifier || len(state.ordered) != 1 || state.ordered[0].InterfaceID() != identifier {
 		t.Fatalf("published state changed with source Catalog: %#v", state)
 	}
 	if err := dispatcher.Publish(catalog); !errors.Is(err, ErrCatalogPublished) {
@@ -205,11 +205,10 @@ func newTestDispatcher(t *testing.T) *Dispatcher {
 
 func testDispatcherCatalog(t *testing.T, value string) (Catalog, capability.Identifier) {
 	t.Helper()
-	providerID := mustPluginID(t, "acme.dispatch.provider")
-	binding := testBinding(t, value, providerID)
+	binding := testBinding(t, value)
 	catalog, err := NewCatalog([]Binding{binding})
 	if err != nil {
 		t.Fatalf("NewCatalog: %v", err)
 	}
-	return catalog, binding.Capability()
+	return catalog, binding.InterfaceID()
 }

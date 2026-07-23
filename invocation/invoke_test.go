@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/plystra/kernel/capability"
-	"github.com/plystra/kernel/plugin"
 )
 
 type invokeRequest struct {
@@ -55,7 +54,7 @@ func TestHandleInvokeRunsCompleteRawDispatchPath(t *testing.T) {
 	}
 }
 
-func TestHandleInvokeDispatchesKernelProvider(t *testing.T) {
+func TestHandleInvokeDispatchesIntrinsicImplementation(t *testing.T) {
 	t.Parallel()
 
 	contract := capability.MustParseContract[invokeRequest, invokeResponse]("kernel.info/v1")
@@ -66,11 +65,10 @@ func TestHandleInvokeDispatchesKernelProvider(t *testing.T) {
 		t.Fatalf("NewEndpoint: %v", err)
 	}
 	binding, err := NewBinding(BindingOptions{
-		ProviderKind:    ProviderKindKernel,
-		ProviderPackage: "github.com/plystra/kernel/intrinsic",
-		ProviderBuild:   mustModuleBuild(t, "github.com/plystra/kernel", "v0.1.0", ""),
+		Kind:            BindingKindIntrinsic,
+		ModuleBuild:     mustModuleBuild(t, "github.com/plystra/kernel", "v0.1.0", ""),
 		SelectionReason: SelectionReasonIntrinsic,
-		SchemaDigest:    sha256.Sum256([]byte("kernel.info/v1 schema")),
+		ContractDigest:  sha256.Sum256([]byte("kernel.info/v1 schema")),
 	}, endpoint)
 	if err != nil {
 		t.Fatalf("NewBinding: %v", err)
@@ -95,8 +93,6 @@ func TestHandleInvokePropagatesNestedAncestry(t *testing.T) {
 
 	outerContract := capability.MustParseContract[invokeRequest, invokeResponse]("example.outer/v1")
 	innerContract := capability.MustParseContract[invokeRequest, invokeResponse]("example.inner/v1")
-	outerProviderID := mustPluginID(t, "acme.invoke.outer")
-	innerProviderID := mustPluginID(t, "acme.invoke.inner")
 	dispatcher, err := NewDispatcher(DispatcherOptions{DefaultTimeout: time.Second})
 	if err != nil {
 		t.Fatalf("NewDispatcher: %v", err)
@@ -108,7 +104,7 @@ func TestHandleInvokePropagatesNestedAncestry(t *testing.T) {
 	}
 	var outerContext InvocationContext
 	var innerContext InvocationContext
-	innerBinding := newInvokeBinding(t, innerContract, innerProviderID, func(ctx context.Context, request invokeRequest) (invokeResponse, error) {
+	innerBinding := newInvokeBinding(t, innerContract, func(ctx context.Context, request invokeRequest) (invokeResponse, error) {
 		var exists bool
 		innerContext, exists = Current(ctx)
 		if !exists {
@@ -116,7 +112,7 @@ func TestHandleInvokePropagatesNestedAncestry(t *testing.T) {
 		}
 		return invokeResponse{Value: "inner:" + request.Value}, nil
 	})
-	outerBinding := newInvokeBinding(t, outerContract, outerProviderID, func(ctx context.Context, request invokeRequest) (invokeResponse, error) {
+	outerBinding := newInvokeBinding(t, outerContract, func(ctx context.Context, request invokeRequest) (invokeResponse, error) {
 		var exists bool
 		outerContext, exists = Current(ctx)
 		if !exists {
@@ -158,8 +154,6 @@ func TestHandleInvokeTreatsDroppedContextAsIndependentCall(t *testing.T) {
 
 	outerContract := capability.MustParseContract[invokeRequest, invokeResponse]("example.context-outer/v1")
 	innerContract := capability.MustParseContract[invokeRequest, invokeResponse]("example.context-inner/v1")
-	outerProviderID := mustPluginID(t, "acme.context.outer")
-	innerProviderID := mustPluginID(t, "acme.context.inner")
 	dispatcher := newInvokeDispatcher(t, time.Second)
 	innerHandle, err := NewHandle(dispatcher, innerContract, true)
 	if err != nil {
@@ -168,12 +162,12 @@ func TestHandleInvokeTreatsDroppedContextAsIndependentCall(t *testing.T) {
 	var innerProviderCalls atomic.Int32
 	var outerContext InvocationContext
 	var innerContext InvocationContext
-	innerBinding := newInvokeBinding(t, innerContract, innerProviderID, func(ctx context.Context, request invokeRequest) (invokeResponse, error) {
+	innerBinding := newInvokeBinding(t, innerContract, func(ctx context.Context, request invokeRequest) (invokeResponse, error) {
 		innerProviderCalls.Add(1)
 		innerContext, _ = Current(ctx)
 		return invokeResponse{Value: "inner:" + request.Value}, nil
 	})
-	outerBinding := newInvokeBinding(t, outerContract, outerProviderID, func(ctx context.Context, request invokeRequest) (invokeResponse, error) {
+	outerBinding := newInvokeBinding(t, outerContract, func(ctx context.Context, request invokeRequest) (invokeResponse, error) {
 		outerContext, _ = Current(ctx)
 		return innerHandle.Invoke(context.Background(), request)
 	})
@@ -531,8 +525,7 @@ func newInvokeHarness(
 	if options.defaultTimeout == 0 {
 		options.defaultTimeout = time.Second
 	}
-	providerID := mustPluginID(t, "acme.invoke.provider")
-	binding := newInvokeBinding(t, contract, providerID, handler)
+	binding := newInvokeBinding(t, contract, handler)
 	dispatcher := newInvokeDispatcher(t, options.defaultTimeout)
 	catalog, err := NewCatalog([]Binding{binding})
 	if err != nil {
@@ -578,7 +571,6 @@ func newInvokeHandleAndContext(
 func newInvokeBinding(
 	t *testing.T,
 	contract capability.Contract[invokeRequest, invokeResponse],
-	providerID plugin.ID,
 	handler capability.Handler[invokeRequest, invokeResponse],
 ) Binding {
 	t.Helper()
@@ -587,12 +579,11 @@ func newInvokeBinding(
 		t.Fatalf("NewEndpoint: %v", err)
 	}
 	binding, err := NewBinding(BindingOptions{
-		ProviderKind:    ProviderKindPlugin,
-		ProviderID:      providerID,
-		ProviderPackage: "github.com/acme/invoke/provider",
-		ProviderBuild:   mustModuleBuild(t, "github.com/acme/invoke", "v1.0.0", ""),
-		SelectionReason: SelectionReasonSoleProvider,
-		SchemaDigest:    sha256.Sum256([]byte(contract.Identifier().String() + " schema")),
+		Kind:            BindingKindImplementation,
+		Constructor:     "github.com/acme/invoke/implementation.New",
+		ModuleBuild:     mustModuleBuild(t, "github.com/acme/invoke", "v1.0.0", ""),
+		SelectionReason: SelectionReasonUniqueCompatible,
+		ContractDigest:  sha256.Sum256([]byte(contract.Identifier().String() + " schema")),
 	}, endpoint)
 	if err != nil {
 		t.Fatalf("NewBinding: %v", err)
@@ -624,17 +615,12 @@ func benchmarkInvokeRuntime(b *testing.B) (Handle[invokeRequest, invokeResponse]
 	if err != nil {
 		b.Fatalf("NewEndpoint: %v", err)
 	}
-	providerID, err := plugin.ParseID("acme.benchmark.provider")
-	if err != nil {
-		b.Fatalf("ParseID(provider): %v", err)
-	}
 	binding, err := NewBinding(BindingOptions{
-		ProviderKind:    ProviderKindPlugin,
-		ProviderID:      providerID,
-		ProviderPackage: "github.com/acme/benchmark/provider",
-		ProviderBuild:   mustModuleBuildBenchmark(b, "github.com/acme/benchmark", "v1.0.0", ""),
-		SelectionReason: SelectionReasonSoleProvider,
-		SchemaDigest:    sha256.Sum256([]byte("example.benchmark-invoke/v1 schema")),
+		Kind:            BindingKindImplementation,
+		Constructor:     "github.com/acme/benchmark/implementation.New",
+		ModuleBuild:     mustModuleBuildBenchmark(b, "github.com/acme/benchmark", "v1.0.0", ""),
+		SelectionReason: SelectionReasonUniqueCompatible,
+		ContractDigest:  sha256.Sum256([]byte("example.benchmark-invoke/v1 schema")),
 	}, endpoint)
 	if err != nil {
 		b.Fatalf("NewBinding: %v", err)

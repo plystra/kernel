@@ -56,16 +56,15 @@ func TestBindingsPublishHealthAndInfoWithoutOrdinaryPlugins(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewBindings: %v", err)
 	}
-	if len(bindings) != 2 || bindings[0].Capability().String() != "kernel.health/v1" || bindings[1].Capability().String() != "kernel.info/v1" {
+	if len(bindings) != 2 || bindings[0].InterfaceID().String() != "kernel.health/v1" || bindings[1].InterfaceID().String() != "kernel.info/v1" {
 		t.Fatalf("bindings = %#v", bindings)
 	}
 	for _, binding := range bindings {
-		build := binding.ProviderBuild()
-		if binding.ProviderKind() != invocation.ProviderKindKernel || binding.ProviderID().String() != "" ||
-			binding.ProviderPackage() != intrinsic.ProviderPackage || binding.SelectionReason() != invocation.SelectionReasonIntrinsic ||
-			binding.SchemaDigest() == [32]byte{} || build.ModulePath() != intrinsic.ModulePath ||
+		build := binding.ModuleBuild()
+		if binding.Kind() != invocation.BindingKindIntrinsic || binding.Constructor() != "" ||
+			binding.SelectionReason() != invocation.SelectionReasonIntrinsic || binding.ContractDigest() == [32]byte{} || build.ModulePath() != intrinsic.ModulePath ||
 			build.ModuleVersion() != "v0.1.0" || build.BuildIdentity() != "git:0123456789abcdef" {
-			t.Fatalf("intrinsic binding %s provenance is incomplete", binding.Capability())
+			t.Fatalf("intrinsic binding %s provenance is incomplete", binding.InterfaceID())
 		}
 	}
 
@@ -74,7 +73,7 @@ func TestBindingsPublishHealthAndInfoWithoutOrdinaryPlugins(t *testing.T) {
 		t.Fatalf("NewCatalog: %v", err)
 	}
 	bindings[0] = invocation.Binding{}
-	if got := catalogSnapshot.Bindings(); len(got) != 2 || got[0].Capability().String() != "kernel.health/v1" {
+	if got := catalogSnapshot.Bindings(); len(got) != 2 || got[0].InterfaceID().String() != "kernel.health/v1" {
 		t.Fatalf("catalog changed with source bindings: %#v", got)
 	}
 	dispatcher, err := invocation.NewDispatcher(invocation.DispatcherOptions{DefaultTimeout: time.Second})
@@ -211,7 +210,7 @@ func FuzzNewBindings(f *testing.F) {
 			}
 			return
 		}
-		if len(bindings) != 2 || bindings[0].Capability().String() != "kernel.health/v1" || bindings[1].Capability().String() != "kernel.info/v1" {
+		if len(bindings) != 2 || bindings[0].InterfaceID().String() != "kernel.health/v1" || bindings[1].InterfaceID().String() != "kernel.info/v1" {
 			t.Fatalf("NewBindings = %#v", bindings)
 		}
 	})

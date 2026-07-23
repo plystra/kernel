@@ -73,11 +73,10 @@ func newBinding(build invocation.ModuleBuild, endpoint invocation.Endpoint) (inv
 		return invocation.Binding{}, fmt.Errorf("%w: catalog omits %s", ErrBindings, identifier.String())
 	}
 	binding, err := invocation.NewBinding(invocation.BindingOptions{
-		ProviderKind:    invocation.ProviderKindKernel,
-		ProviderPackage: ProviderPackage,
-		ProviderBuild:   build,
+		Kind:            invocation.BindingKindIntrinsic,
+		ModuleBuild:     build,
 		SelectionReason: invocation.SelectionReasonIntrinsic,
-		SchemaDigest:    definition.SchemaDigest(),
+		ContractDigest:  definition.SchemaDigest(),
 	}, endpoint)
 	if err != nil {
 		return invocation.Binding{}, fmt.Errorf("%w: bind %s: %w", ErrBindings, identifier.String(), err)
