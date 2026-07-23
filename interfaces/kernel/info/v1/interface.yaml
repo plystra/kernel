@@ -1,0 +1,3 @@
+description: Reports non-sensitive Kernel compatibility information.
+semantics:
+  kind: query

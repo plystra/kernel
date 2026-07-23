@@ -6,6 +6,8 @@ import (
 	"fmt"
 
 	"github.com/plystra/kernel/capability/catalog"
+	healthv1 "github.com/plystra/kernel/interfaces/kernel/health/v1"
+	infov1 "github.com/plystra/kernel/interfaces/kernel/info/v1"
 	"github.com/plystra/kernel/invocation"
 )
 
@@ -30,8 +32,8 @@ func NewBindings(options BindingOptions) ([]invocation.Binding, error) {
 		return nil, fmt.Errorf("%w: build provenance: %w", ErrBindings, err)
 	}
 
-	healthEndpoint, err := invocation.NewEndpoint(healthContract, func(context.Context, HealthRequest) (HealthResponse, error) {
-		return HealthResponse{Status: HealthStatusHealthy}, nil
+	healthEndpoint, err := invocation.NewEndpoint(healthContract, func(context.Context, healthv1.Request) (healthv1.Response, error) {
+		return healthv1.Response{Status: healthv1.StatusHealthy}, nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("%w: kernel.health/v1 endpoint: %w", ErrBindings, err)
@@ -45,12 +47,12 @@ func NewBindings(options BindingOptions) ([]invocation.Binding, error) {
 	if version == "" {
 		version = "devel"
 	}
-	infoResponse := InfoResponse{
+	infoResponse := infov1.Response{
 		AssemblyAPI:   "v1",
 		KernelModule:  ModulePath,
 		KernelVersion: version,
 	}
-	infoEndpoint, err := invocation.NewEndpoint(infoContract, func(context.Context, InfoRequest) (InfoResponse, error) {
+	infoEndpoint, err := invocation.NewEndpoint(infoContract, func(context.Context, infov1.Request) (infov1.Response, error) {
 		return infoResponse, nil
 	})
 	if err != nil {

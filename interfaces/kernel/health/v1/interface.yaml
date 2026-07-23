@@ -1,0 +1,3 @@
+description: Reports intrinsic Kernel liveness.
+semantics:
+  kind: query

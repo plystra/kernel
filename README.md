@@ -67,7 +67,7 @@ Runtime configuration is validated and resolved through intrinsic Kernel facilit
 
 The `configuration` package is the runtime boundary used by generated typed adapters and bootstrap code. Its generic document loader accepts only a bounded regular file, rejects a symbolic final path, and detects file replacement or observable modification while reading without exposing paths or private values. Generic immutable object and string-map extractors let generated code select its own application sections without teaching the Kernel their names or meaning. Its per-plugin decoder rejects unknown, missing, malformed, excessively deep, and oversized values; applies declared defaults and enums; converts every supported scalar, object, and array type; and resolves only fields declared as Secrets. The matching non-resolving validation path checks the exact final value contract, while partial normalization validates only explicitly present fields and returns redacted immutable field data plus semantic digests for CLI-owned typed composition; neither path reads environment variables or files. Secret references accept only validated portable environment-variable names or clean absolute POSIX and Windows regular-file targets within a mandatory byte bound. Resolved values are immutable and defensive, while configuration objects, setting maps, references, Secrets, and partial values are redacted for every formatting and structured-logging path and reject JSON, text, and YAML serialization. Errors retain only declared field names, safe failure classes, and standard cancellation or deadline causes.
 
-## Intrinsic Capabilities
+## Intrinsic Interfaces
 
 Reserved identities include:
 
@@ -76,9 +76,9 @@ kernel.health/v1
 kernel.info/v1
 ```
 
-They are implemented directly by the Kernel, require no ordinary provider or `capabilities.use` entry, cannot be overridden by plugins, and remain available regardless of the selected application plugin set. HTTP exposure is still explicit, and responses redact private configuration, Secrets, sensitive paths, and unsafe build details.
+They are implemented directly by the Kernel, require no ordinary Implementation or `interfaces.use` entry, cannot be overridden by application code, and remain available regardless of the selected application package set. HTTP exposure is still explicit, and responses redact private configuration, Secrets, sensitive paths, and unsafe build details.
 
-The `intrinsic` package publishes the shared typed contracts and constructs both executable Kernel bindings in canonical ID order. Assembly supplies only validated Kernel Go Module provenance; the bindings use intrinsic selection, carry no Plugin ID, and can form a complete catalog with no ordinary providers. `kernel.health/v1` returns only `healthy`. `kernel.info/v1` returns assembly API `v1`, `github.com/plystra/kernel`, and the canonical Kernel module version, or the fixed `devel` marker for an unversioned build; build identities and other private build details are not returned.
+The canonical authored packages are `interfaces/kernel/health/v1` and `interfaces/kernel/info/v1`. Each defines one versioned Go Interface plus its request and response types. The `intrinsic` package publishes their deterministic reserved inventory and constructs both executable Kernel bindings in canonical ID order. Assembly supplies only validated Kernel Go Module provenance; the bindings use intrinsic selection, carry no application Implementation identity, and can form a complete catalog with no ordinary bindings. `kernel.health/v1` returns only `healthy`. `kernel.info/v1` returns assembly API `v1`, `github.com/plystra/kernel`, and the canonical Kernel module version, or the fixed `devel` marker for an unversioned build; build identities and other private build details are not returned.
 
 ## Telemetry and audit
 

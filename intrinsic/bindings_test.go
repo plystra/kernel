@@ -12,6 +12,8 @@ import (
 
 	"github.com/plystra/kernel/capability"
 	"github.com/plystra/kernel/capability/catalog"
+	healthv1 "github.com/plystra/kernel/interfaces/kernel/health/v1"
+	infov1 "github.com/plystra/kernel/interfaces/kernel/info/v1"
 	"github.com/plystra/kernel/intrinsic"
 	"github.com/plystra/kernel/invocation"
 )
@@ -34,11 +36,11 @@ func TestContractsMatchAuthoritativeIntrinsicCatalog(t *testing.T) {
 		}
 	}
 
-	healthJSON, err := json.Marshal(intrinsic.HealthResponse{Status: intrinsic.HealthStatusHealthy})
+	healthJSON, err := json.Marshal(healthv1.Response{Status: healthv1.StatusHealthy})
 	if err != nil || string(healthJSON) != `{"status":"healthy"}` {
 		t.Fatalf("HealthResponse JSON = %s, %v", healthJSON, err)
 	}
-	infoJSON, err := json.Marshal(intrinsic.InfoResponse{AssemblyAPI: "v1", KernelModule: intrinsic.ModulePath, KernelVersion: "v0.1.0"})
+	infoJSON, err := json.Marshal(infov1.Response{AssemblyAPI: "v1", KernelModule: intrinsic.ModulePath, KernelVersion: "v0.1.0"})
 	if err != nil || string(infoJSON) != `{"assembly_api":"v1","kernel_module":"github.com/plystra/kernel","kernel_version":"v0.1.0"}` {
 		t.Fatalf("InfoResponse JSON = %s, %v", infoJSON, err)
 	}
@@ -91,11 +93,11 @@ func TestBindingsPublishHealthAndInfoWithoutOrdinaryPlugins(t *testing.T) {
 		t.Fatalf("NewHandle(info): %v", err)
 	}
 
-	healthResponse, err := health.Invoke(context.Background(), intrinsic.HealthRequest{})
-	if err != nil || healthResponse != (intrinsic.HealthResponse{Status: intrinsic.HealthStatusHealthy}) {
+	healthResponse, err := health.Invoke(context.Background(), healthv1.Request{})
+	if err != nil || healthResponse != (healthv1.Response{Status: healthv1.StatusHealthy}) {
 		t.Fatalf("health.Invoke = %#v, %v", healthResponse, err)
 	}
-	infoResponse, err := info.Invoke(context.Background(), intrinsic.InfoRequest{})
+	infoResponse, err := info.Invoke(context.Background(), infov1.Request{})
 	if err != nil || infoResponse.AssemblyAPI != "v1" || infoResponse.KernelModule != intrinsic.ModulePath || infoResponse.KernelVersion != "v0.1.0" {
 		t.Fatalf("info.Invoke = %#v, %v", infoResponse, err)
 	}
@@ -105,7 +107,7 @@ func TestBindingsPublishHealthAndInfoWithoutOrdinaryPlugins(t *testing.T) {
 
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
-	if response, err := health.Invoke(cancelled, intrinsic.HealthRequest{}); response != (intrinsic.HealthResponse{}) || !errors.Is(err, context.Canceled) {
+	if response, err := health.Invoke(cancelled, healthv1.Request{}); response != (healthv1.Response{}) || !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled health.Invoke = %#v, %v", response, err)
 	}
 }
@@ -121,7 +123,7 @@ func TestDevelopmentBindingsExposeOnlyDevelopmentVersionMarker(t *testing.T) {
 	if !dispatcher.Published() {
 		t.Fatal("intrinsic dispatcher is unpublished")
 	}
-	response, err := info.Invoke(context.Background(), intrinsic.InfoRequest{})
+	response, err := info.Invoke(context.Background(), infov1.Request{})
 	if err != nil || response.KernelVersion != "devel" || strings.Contains(fmt.Sprintf("%+v", response), "workspace") {
 		t.Fatalf("development info = %#v, %v", response, err)
 	}
@@ -157,8 +159,8 @@ func TestBindingsAreSafeForConcurrentIntrinsicReads(t *testing.T) {
 		go func() {
 			defer wait.Done()
 			for call := 0; call < 100; call++ {
-				response, err := health.Invoke(context.Background(), intrinsic.HealthRequest{})
-				if err != nil || response.Status != intrinsic.HealthStatusHealthy {
+				response, err := health.Invoke(context.Background(), healthv1.Request{})
+				if err != nil || response.Status != healthv1.StatusHealthy {
 					errorsFound <- fmt.Errorf("health response %#v: %w", response, err)
 					return
 				}
@@ -215,7 +217,7 @@ func FuzzNewBindings(f *testing.F) {
 	})
 }
 
-func intrinsicInfoHandle(t testing.TB, bindings []invocation.Binding) (*invocation.Dispatcher, invocation.Handle[intrinsic.InfoRequest, intrinsic.InfoResponse]) {
+func intrinsicInfoHandle(t testing.TB, bindings []invocation.Binding) (*invocation.Dispatcher, invocation.Handle[infov1.Request, infov1.Response]) {
 	t.Helper()
 	catalogSnapshot, err := invocation.NewCatalog(bindings)
 	if err != nil {
