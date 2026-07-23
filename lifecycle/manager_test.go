@@ -42,11 +42,11 @@ func TestManagerStartsForwardAndStopsReverse(t *testing.T) {
 
 	events := make([]string, 0, 4)
 	bindings := []lifecycle.Binding{
-		lifecycleBinding(t, "acme.lifecycle.second", &testLifecycleProvider{
+		lifecycleBinding(t, "example.com/acme/lifecycle/second.New", &testLifecycleInstance{
 			start: func(context.Context) error { events = append(events, "start:second"); return nil },
 			stop:  func(context.Context) error { events = append(events, "stop:second"); return nil },
 		}),
-		lifecycleBinding(t, "acme.lifecycle.first", &testLifecycleProvider{
+		lifecycleBinding(t, "example.com/acme/lifecycle/first.New", &testLifecycleInstance{
 			start: func(context.Context) error { events = append(events, "start:first"); return nil },
 			stop:  func(context.Context) error { events = append(events, "stop:first"); return nil },
 		}),
@@ -75,7 +75,7 @@ func TestManagerStartsForwardAndStopsReverse(t *testing.T) {
 	}
 }
 
-func TestManagerSupportsNoLifecycleProviders(t *testing.T) {
+func TestManagerSupportsNoLifecycleInstances(t *testing.T) {
 	t.Parallel()
 
 	manager := newLifecycleManager(t, nil)
@@ -95,7 +95,7 @@ func TestManagerSupportsNoLifecycleProviders(t *testing.T) {
 func TestManagerRejectsInvalidOptionsAndBindings(t *testing.T) {
 	t.Parallel()
 
-	valid := lifecycleBinding(t, "acme.lifecycle.duplicate", &testLifecycleProvider{})
+	valid := lifecycleBinding(t, "example.com/acme/lifecycle/duplicate.New", &testLifecycleInstance{})
 	for _, test := range []struct {
 		name     string
 		options  lifecycle.ManagerOptions
@@ -104,7 +104,7 @@ func TestManagerRejectsInvalidOptionsAndBindings(t *testing.T) {
 		{name: "zero rollback timeout"},
 		{name: "negative rollback timeout", options: lifecycle.ManagerOptions{RollbackTimeout: -time.Second}},
 		{name: "zero binding", options: lifecycle.ManagerOptions{RollbackTimeout: time.Second}, bindings: []lifecycle.Binding{{}}},
-		{name: "duplicate Plugin ID", options: lifecycle.ManagerOptions{RollbackTimeout: time.Second}, bindings: []lifecycle.Binding{valid, valid}},
+		{name: "duplicate constructor", options: lifecycle.ManagerOptions{RollbackTimeout: time.Second}, bindings: []lifecycle.Binding{valid, valid}},
 	} {
 		manager, err := lifecycle.NewManager(test.options, test.bindings)
 		if !errors.Is(err, lifecycle.ErrInvalidManager) || manager != nil {
@@ -128,18 +128,18 @@ func TestManagerRejectsInvalidOptionsAndBindings(t *testing.T) {
 	}
 }
 
-func TestManagerRollsBackFailingProviderWithoutLeakingError(t *testing.T) {
+func TestManagerRollsBackFailingInstanceWithoutLeakingError(t *testing.T) {
 	t.Parallel()
 
 	secret := errors.New("password=secret")
 	events := make([]string, 0, 4)
 	rollbackValuePreserved := false
 	manager := newLifecycleManager(t, []lifecycle.Binding{
-		lifecycleBinding(t, "acme.lifecycle.ready", &testLifecycleProvider{
+		lifecycleBinding(t, "example.com/acme/lifecycle/ready.New", &testLifecycleInstance{
 			start: func(context.Context) error { events = append(events, "start:ready"); return nil },
 			stop:  func(context.Context) error { events = append(events, "stop:ready"); return nil },
 		}),
-		lifecycleBinding(t, "acme.lifecycle.failing", &testLifecycleProvider{
+		lifecycleBinding(t, "example.com/acme/lifecycle/failing.New", &testLifecycleInstance{
 			start: func(context.Context) error { events = append(events, "start:failing"); return secret },
 			stop: func(ctx context.Context) error {
 				events = append(events, "stop:failing")
@@ -151,7 +151,7 @@ func TestManagerRollsBackFailingProviderWithoutLeakingError(t *testing.T) {
 
 	err := manager.Start(context.WithValue(context.Background(), lifecycleContextKey{}, "preserved"))
 	if !errors.Is(err, lifecycle.ErrStart) || errors.Is(err, secret) || strings.Contains(err.Error(), "secret") ||
-		!strings.Contains(err.Error(), "acme.lifecycle.failing") || manager.State() != lifecycle.StateFailed {
+		!strings.Contains(err.Error(), "example.com/acme/lifecycle/failing.New") || manager.State() != lifecycle.StateFailed {
 		t.Fatalf("Start failure = %v, State %s", err, manager.State())
 	}
 	want := []string{"start:ready", "start:failing", "stop:failing", "stop:ready"}
@@ -163,7 +163,7 @@ func TestManagerRollsBackFailingProviderWithoutLeakingError(t *testing.T) {
 	}
 }
 
-func TestManagerReportsRollbackFailureAndRetriesOnlyActiveProvider(t *testing.T) {
+func TestManagerReportsRollbackFailureAndRetriesOnlyActiveInstance(t *testing.T) {
 	t.Parallel()
 
 	secretStart := errors.New("token=start-secret")
@@ -171,11 +171,11 @@ func TestManagerReportsRollbackFailureAndRetriesOnlyActiveProvider(t *testing.T)
 	var stopAttempts atomic.Int32
 	events := make([]string, 0, 5)
 	manager := newLifecycleManager(t, []lifecycle.Binding{
-		lifecycleBinding(t, "acme.lifecycle.stable", &testLifecycleProvider{
+		lifecycleBinding(t, "example.com/acme/lifecycle/stable.New", &testLifecycleInstance{
 			start: func(context.Context) error { events = append(events, "start:stable"); return nil },
 			stop:  func(context.Context) error { events = append(events, "stop:stable"); return nil },
 		}),
-		lifecycleBinding(t, "acme.lifecycle.retry", &testLifecycleProvider{
+		lifecycleBinding(t, "example.com/acme/lifecycle/retry.New", &testLifecycleInstance{
 			start: func(context.Context) error { events = append(events, "start:retry"); return secretStart },
 			stop: func(context.Context) error {
 				events = append(events, "stop:retry")
@@ -206,7 +206,7 @@ func TestManagerRecoversLifecyclePanics(t *testing.T) {
 
 	t.Run("start", func(t *testing.T) {
 		manager := newLifecycleManager(t, []lifecycle.Binding{
-			lifecycleBinding(t, "acme.lifecycle.start-panic", &testLifecycleProvider{
+			lifecycleBinding(t, "example.com/acme/lifecycle/start-panic.New", &testLifecycleInstance{
 				start: func(context.Context) error { panic("password=start-secret") },
 			}),
 		})
@@ -218,7 +218,7 @@ func TestManagerRecoversLifecyclePanics(t *testing.T) {
 
 	t.Run("stop", func(t *testing.T) {
 		manager := newLifecycleManager(t, []lifecycle.Binding{
-			lifecycleBinding(t, "acme.lifecycle.stop-panic", &testLifecycleProvider{
+			lifecycleBinding(t, "example.com/acme/lifecycle/stop-panic.New", &testLifecycleInstance{
 				stop: func(context.Context) error { panic("password=stop-secret") },
 			}),
 		})
@@ -240,7 +240,7 @@ func TestManagerClassifiesOperationContexts(t *testing.T) {
 		cancel()
 		var calls atomic.Int32
 		manager := newLifecycleManager(t, []lifecycle.Binding{
-			lifecycleBinding(t, "acme.lifecycle.cancelled", &testLifecycleProvider{start: func(context.Context) error {
+			lifecycleBinding(t, "example.com/acme/lifecycle/cancelled.New", &testLifecycleInstance{start: func(context.Context) error {
 				calls.Add(1)
 				return nil
 			}}),
@@ -255,7 +255,7 @@ func TestManagerClassifiesOperationContexts(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 		defer cancel()
 		manager := newLifecycleManager(t, []lifecycle.Binding{
-			lifecycleBinding(t, "acme.lifecycle.deadline", &testLifecycleProvider{start: func(ctx context.Context) error {
+			lifecycleBinding(t, "example.com/acme/lifecycle/deadline.New", &testLifecycleInstance{start: func(ctx context.Context) error {
 				<-ctx.Done()
 				return errors.New("deadline secret")
 			}}),
@@ -269,7 +269,7 @@ func TestManagerClassifiesOperationContexts(t *testing.T) {
 	t.Run("cancelled stop can retry", func(t *testing.T) {
 		var stops atomic.Int32
 		manager := newLifecycleManager(t, []lifecycle.Binding{
-			lifecycleBinding(t, "acme.lifecycle.stop-cancel", &testLifecycleProvider{stop: func(context.Context) error {
+			lifecycleBinding(t, "example.com/acme/lifecycle/stop-cancel.New", &testLifecycleInstance{stop: func(context.Context) error {
 				stops.Add(1)
 				return nil
 			}}),
@@ -295,7 +295,7 @@ func TestManagerRejectsConcurrentTransitions(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	manager := newLifecycleManager(t, []lifecycle.Binding{
-		lifecycleBinding(t, "acme.lifecycle.concurrent", &testLifecycleProvider{start: func(context.Context) error {
+		lifecycleBinding(t, "example.com/acme/lifecycle/concurrent.New", &testLifecycleInstance{start: func(context.Context) error {
 			close(entered)
 			<-release
 			return nil
@@ -352,11 +352,11 @@ func FuzzManagerOperationSequence(f *testing.F) {
 	})
 }
 
-func lifecycleBinding(t testing.TB, id string, provider lifecycle.Provider) lifecycle.Binding {
+func lifecycleBinding(t testing.TB, constructor string, instance lifecycle.Instance) lifecycle.Binding {
 	t.Helper()
-	binding, err := lifecycle.NewBinding(lifecyclePluginID(t, id), provider)
+	binding, err := lifecycle.NewBinding(constructor, instance)
 	if err != nil {
-		t.Fatalf("NewBinding(%s): %v", id, err)
+		t.Fatalf("NewBinding(%s): %v", constructor, err)
 	}
 	return binding
 }

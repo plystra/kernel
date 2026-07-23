@@ -7,21 +7,19 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/plystra/kernel/plugin"
 )
 
 var (
 	// ErrInvalidManager reports invalid lifecycle bindings or options.
-	ErrInvalidManager = errors.New("invalid provider lifecycle manager")
+	ErrInvalidManager = errors.New("invalid implementation lifecycle manager")
 	// ErrInvalidContext reports a nil lifecycle operation context.
-	ErrInvalidContext = errors.New("invalid provider lifecycle context")
+	ErrInvalidContext = errors.New("invalid implementation lifecycle context")
 	// ErrState reports an operation that is not valid in the current state.
-	ErrState = errors.New("invalid provider lifecycle state")
-	// ErrStart reports a redacted provider startup failure.
-	ErrStart = errors.New("provider lifecycle startup failed")
-	// ErrStop reports one or more redacted provider shutdown failures.
-	ErrStop = errors.New("provider lifecycle shutdown failed")
+	ErrState = errors.New("invalid implementation lifecycle state")
+	// ErrStart reports a redacted Implementation startup failure.
+	ErrStart = errors.New("implementation lifecycle startup failed")
+	// ErrStop reports one or more redacted Implementation shutdown failures.
+	ErrStop = errors.New("implementation lifecycle shutdown failed")
 )
 
 // State is one closed manager lifecycle state.
@@ -60,8 +58,8 @@ type ManagerOptions struct {
 	RollbackTimeout time.Duration
 }
 
-// Manager starts lifecycle providers in generated order and stops active
-// providers in reverse order. It never discovers or reorders providers.
+// Manager starts lifecycle instances in generated order and stops active
+// instances in reverse order. It never discovers or reorders Implementations.
 type Manager struct {
 	mu              sync.RWMutex
 	bindings        []Binding
@@ -71,21 +69,21 @@ type Manager struct {
 }
 
 // NewManager validates and defensively copies an already-resolved lifecycle
-// order. Plugin IDs must be unique.
+// order. Constructor symbols must be unique.
 func NewManager(options ManagerOptions, bindings []Binding) (*Manager, error) {
 	if options.RollbackTimeout <= 0 {
 		return nil, ErrInvalidManager
 	}
-	seen := make(map[plugin.ID]struct{}, len(bindings))
+	seen := make(map[string]struct{}, len(bindings))
 	ordered := make([]Binding, len(bindings))
 	for index, binding := range bindings {
 		if !binding.valid() {
 			return nil, fmt.Errorf("%w: binding %d: %w", ErrInvalidManager, index, ErrInvalidBinding)
 		}
-		if _, duplicate := seen[binding.pluginID]; duplicate {
-			return nil, fmt.Errorf("%w: duplicate plugin %s", ErrInvalidManager, binding.pluginID)
+		if _, duplicate := seen[binding.constructor]; duplicate {
+			return nil, fmt.Errorf("%w: duplicate constructor %s", ErrInvalidManager, binding.constructor)
 		}
-		seen[binding.pluginID] = struct{}{}
+		seen[binding.constructor] = struct{}{}
 		ordered[index] = binding
 	}
 	return &Manager{
@@ -106,8 +104,8 @@ func (m *Manager) State() State {
 	return m.state
 }
 
-// Start invokes providers in the exact generated order. A failure triggers a
-// bounded reverse-order rollback that includes the failing provider in case it
+// Start invokes instances in the exact generated order. A failure triggers a
+// bounded reverse-order rollback that includes the failing instance in case it
 // acquired resources before returning or panicking.
 func (m *Manager) Start(ctx context.Context) error {
 	if m == nil {
@@ -131,18 +129,18 @@ func (m *Manager) Start(ctx context.Context) error {
 			return errors.Join(operationFailure(ErrStart, "", err), rollback)
 		}
 		m.active[index] = true
-		if err := invokeHook(ctx, binding.provider.Start); err != nil {
+		if err := invokeHook(ctx, binding.instance.Start); err != nil {
 			rollback := m.rollback(ctx, index)
 			m.setState(StateFailed)
-			return errors.Join(operationFailure(ErrStart, "plugin "+binding.pluginID.String(), err), rollback)
+			return errors.Join(operationFailure(ErrStart, "constructor "+binding.constructor, err), rollback)
 		}
 	}
 	m.setState(StateRunning)
 	return nil
 }
 
-// Stop invokes every active provider in reverse generated order. Successful
-// providers are not called again; failed stops may be retried by calling Stop
+// Stop invokes every active instance in reverse generated order. Successful
+// instances are not called again; failed stops may be retried by calling Stop
 // with a fresh context.
 func (m *Manager) Stop(ctx context.Context) error {
 	if m == nil {
@@ -212,8 +210,8 @@ func (m *Manager) stopActive(ctx context.Context, last int) error {
 			continue
 		}
 		binding := m.bindings[index]
-		if err := invokeHook(ctx, binding.provider.Stop); err != nil {
-			failed = append(failed, binding.pluginID.String())
+		if err := invokeHook(ctx, binding.instance.Stop); err != nil {
+			failed = append(failed, binding.constructor)
 			if contextError(err) != nil {
 				cause = contextError(err)
 			}
@@ -224,7 +222,7 @@ func (m *Manager) stopActive(ctx context.Context, last int) error {
 	if len(failed) == 0 {
 		return nil
 	}
-	return operationFailure(ErrStop, "plugins "+strings.Join(failed, ", "), cause)
+	return operationFailure(ErrStop, "constructors "+strings.Join(failed, ", "), cause)
 }
 
 func invokeHook(ctx context.Context, hook func(context.Context) error) (err error) {
@@ -233,7 +231,7 @@ func invokeHook(ctx context.Context, hook func(context.Context) error) (err erro
 	}
 	defer func() {
 		if recover() != nil {
-			err = errProviderHook
+			err = errInstanceHook
 		}
 	}()
 	hookErr := hook(ctx)
@@ -241,12 +239,12 @@ func invokeHook(ctx context.Context, hook func(context.Context) error) (err erro
 		return err
 	}
 	if hookErr != nil {
-		return errProviderHook
+		return errInstanceHook
 	}
 	return nil
 }
 
-var errProviderHook = errors.New("provider lifecycle hook failed")
+var errInstanceHook = errors.New("implementation lifecycle hook failed")
 
 type safeOperationError struct {
 	kind   error

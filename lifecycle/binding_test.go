@@ -6,71 +6,64 @@ import (
 	"testing"
 
 	"github.com/plystra/kernel/lifecycle"
-	"github.com/plystra/kernel/plugin"
 )
 
-func TestBindingRequiresConcretePluginAndProvider(t *testing.T) {
+func TestBindingRequiresConstructorAndInstance(t *testing.T) {
 	t.Parallel()
 
-	id := lifecyclePluginID(t, "acme.lifecycle.valid")
-	provider := &testLifecycleProvider{}
-	binding, err := lifecycle.NewBinding(id, provider)
+	constructor := "example.com/acme/lifecycle.New"
+	instance := &testLifecycleInstance{}
+	binding, err := lifecycle.NewBinding(constructor, instance)
 	if err != nil {
 		t.Fatalf("NewBinding: %v", err)
 	}
-	if binding.PluginID() != id {
-		t.Fatalf("PluginID = %s, want %s", binding.PluginID(), id)
+	if binding.Constructor() != constructor {
+		t.Fatalf("Constructor = %s, want %s", binding.Constructor(), constructor)
 	}
-	if copied := binding; copied.PluginID() != id {
+	if copied := binding; copied.Constructor() != constructor {
 		t.Fatalf("copied binding = %#v", copied)
 	}
 
-	var typedNil *testLifecycleProvider
+	var typedNil *testLifecycleInstance
 	for _, test := range []struct {
-		name     string
-		pluginID plugin.ID
-		provider lifecycle.Provider
+		name        string
+		constructor string
+		instance    lifecycle.Instance
 	}{
-		{name: "zero Plugin ID", provider: provider},
-		{name: "nil provider", pluginID: id},
-		{name: "typed nil provider", pluginID: id, provider: typedNil},
+		{name: "empty constructor", instance: instance},
+		{name: "malformed constructor", constructor: "example.com/acme/lifecycle", instance: instance},
+		{name: "unexported constructor", constructor: "example.com/acme/lifecycle.new", instance: instance},
+		{name: "invalid import path", constructor: "../lifecycle.New", instance: instance},
+		{name: "nil instance", constructor: constructor},
+		{name: "typed nil instance", constructor: constructor, instance: typedNil},
 	} {
-		invalid, err := lifecycle.NewBinding(test.pluginID, test.provider)
-		if !errors.Is(err, lifecycle.ErrInvalidBinding) || invalid.PluginID().String() != "" {
+		invalid, err := lifecycle.NewBinding(test.constructor, test.instance)
+		if !errors.Is(err, lifecycle.ErrInvalidBinding) || invalid.Constructor() != "" {
 			t.Fatalf("%s NewBinding = %#v, %v", test.name, invalid, err)
 		}
 	}
 
 	var zero lifecycle.Binding
-	if zero.PluginID().String() != "" {
-		t.Fatalf("zero binding PluginID = %s", zero.PluginID())
+	if zero.Constructor() != "" {
+		t.Fatalf("zero binding Constructor = %s", zero.Constructor())
 	}
 }
 
-type testLifecycleProvider struct {
+type testLifecycleInstance struct {
 	start func(context.Context) error
 	stop  func(context.Context) error
 }
 
-func (p *testLifecycleProvider) Start(ctx context.Context) error {
-	if p.start == nil {
+func (instance *testLifecycleInstance) Start(ctx context.Context) error {
+	if instance.start == nil {
 		return nil
 	}
-	return p.start(ctx)
+	return instance.start(ctx)
 }
 
-func (p *testLifecycleProvider) Stop(ctx context.Context) error {
-	if p.stop == nil {
+func (instance *testLifecycleInstance) Stop(ctx context.Context) error {
+	if instance.stop == nil {
 		return nil
 	}
-	return p.stop(ctx)
-}
-
-func lifecyclePluginID(t testing.TB, value string) plugin.ID {
-	t.Helper()
-	id, err := plugin.ParseID(value)
-	if err != nil {
-		t.Fatalf("ParseID(%q): %v", value, err)
-	}
-	return id
+	return instance.stop(ctx)
 }

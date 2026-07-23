@@ -3,56 +3,71 @@ package lifecycle
 import (
 	"context"
 	"errors"
+	"go/ast"
+	"go/token"
 	"reflect"
+	"strings"
 
-	"github.com/plystra/kernel/plugin"
+	"golang.org/x/mod/module"
 )
 
-// ErrInvalidBinding reports an invalid Plugin ID or provider lifecycle.
-var ErrInvalidBinding = errors.New("invalid provider lifecycle binding")
+// ErrInvalidBinding reports an invalid constructor symbol or Implementation
+// lifecycle.
+var ErrInvalidBinding = errors.New("invalid implementation lifecycle binding")
 
-// Provider is the optional lifecycle surface implemented by an in-process
-// plugin that owns resources requiring explicit startup and shutdown. Stop
-// must tolerate partially completed startup and be safe to retry after it
-// reports failure.
-type Provider interface {
+// Instance is the optional lifecycle surface implemented by an in-process
+// concrete Implementation that owns resources requiring explicit startup and
+// shutdown. Stop must tolerate partially completed startup and be safe to
+// retry after it reports failure.
+type Instance interface {
 	Start(context.Context) error
 	Stop(context.Context) error
 }
 
-// Binding joins one concrete Plugin ID to its optional lifecycle provider.
-// Generated assembly determines binding order before the Kernel starts.
+// Binding joins one selected constructor symbol to its concrete lifecycle
+// instance. Generated assembly determines binding order before the Kernel
+// starts.
 type Binding struct {
-	pluginID plugin.ID
-	provider Provider
+	constructor string
+	instance    Instance
 }
 
-// NewBinding validates one already-resolved lifecycle provider.
-func NewBinding(pluginID plugin.ID, provider Provider) (Binding, error) {
-	binding := Binding{pluginID: pluginID, provider: provider}
+// NewBinding validates one already-resolved Implementation lifecycle instance.
+func NewBinding(constructor string, instance Instance) (Binding, error) {
+	binding := Binding{constructor: constructor, instance: instance}
 	if !binding.valid() {
 		return Binding{}, ErrInvalidBinding
 	}
 	return binding, nil
 }
 
-// PluginID returns the concrete plugin that owns the lifecycle.
-func (b Binding) PluginID() plugin.ID {
+// Constructor returns the exact fully qualified constructor symbol that owns
+// the lifecycle instance.
+func (b Binding) Constructor() string {
 	if !b.valid() {
-		return plugin.ID{}
+		return ""
 	}
-	return b.pluginID
+	return b.constructor
 }
 
 func (b Binding) valid() bool {
-	return b.pluginID.String() != "" && !nilProvider(b.provider)
+	return validConstructorSymbol(b.constructor) && !nilInstance(b.instance)
 }
 
-func nilProvider(provider Provider) bool {
-	if provider == nil {
+func validConstructorSymbol(symbol string) bool {
+	separator := strings.LastIndexByte(symbol, '.')
+	if separator <= 0 || separator == len(symbol)-1 {
+		return false
+	}
+	packagePath, functionName := symbol[:separator], symbol[separator+1:]
+	return module.CheckImportPath(packagePath) == nil && token.IsIdentifier(functionName) && ast.IsExported(functionName)
+}
+
+func nilInstance(instance Instance) bool {
+	if instance == nil {
 		return true
 	}
-	value := reflect.ValueOf(provider)
+	value := reflect.ValueOf(instance)
 	switch value.Kind() {
 	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
 		return value.IsNil()
