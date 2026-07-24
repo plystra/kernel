@@ -16,15 +16,12 @@ type Interface interface {
 // Request is the empty health request.
 type Request struct{}
 
-// Status is the closed intrinsic liveness state.
-type Status string
-
 const (
 	// StatusHealthy reports that the intrinsic Kernel endpoint is live.
-	StatusHealthy Status = "healthy"
+	StatusHealthy = "healthy"
 )
 
 // Response is the bounded health response.
 type Response struct {
-	Status Status `json:"status" plystra:"1,required"`
+	Status string `json:"status" plystra:"1,required"`
 }

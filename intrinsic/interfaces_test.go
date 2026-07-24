@@ -74,8 +74,13 @@ func TestCanonicalIntrinsicInterfaceShapes(t *testing.T) {
 			}
 		})
 	}
-	if field, ok := reflect.TypeOf(healthv1.Response{}).FieldByName("Status"); !ok || field.Tag.Get("plystra") != "1,required" {
-		t.Fatalf("health response Status tag = %q, %t", field.Tag.Get("plystra"), ok)
+	field, ok := reflect.TypeOf(healthv1.Response{}).FieldByName("Status")
+	if !ok {
+		t.Fatal("health response omits Status")
+	}
+	if field.Type.Kind() != reflect.String || field.Type.PkgPath() != "" ||
+		field.Tag.Get("json") != "status" || field.Tag.Get("plystra") != "1,required" {
+		t.Fatalf("health response Status = type %v package %q json %q plystra %q", field.Type, field.Type.PkgPath(), field.Tag.Get("json"), field.Tag.Get("plystra"))
 	}
 	for index, name := range []string{"AssemblyAPI", "KernelModule", "KernelVersion"} {
 		field, ok := reflect.TypeOf(infov1.Response{}).FieldByName(name)
