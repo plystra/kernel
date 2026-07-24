@@ -56,7 +56,7 @@ func TestLookupIntrinsicDefinitions(t *testing.T) {
 		response    []string
 		digest      string
 	}{
-		{id: "kernel.health/v1", description: "Reports intrinsic Kernel liveness.", response: []string{"status"}, digest: "24b3601547ebd37da37341a86699a51b2e8a2d1706662bafed0b4d6d3a1548a9"},
+		{id: "kernel.health/v1", description: "Reports intrinsic Kernel liveness.", response: []string{"status"}, digest: "83ae98630f252c7bb58cffa403e1f4aac55376224b430001dad34266bdccb80c"},
 		{id: "kernel.info/v1", description: "Reports non-sensitive Kernel compatibility information.", response: []string{"assembly_api", "kernel_module", "kernel_version"}, digest: "3ec0d8f2bfda17c88d8bf5e724f8612049fb0779074999f3a7c9fc9495d3695b"},
 	}
 	for _, test := range tests {
@@ -79,6 +79,12 @@ func TestLookupIntrinsicDefinitions(t *testing.T) {
 			}
 			if got := fieldNames(definition.Contract().Response()); !reflect.DeepEqual(got, test.response) {
 				t.Fatalf("response fields = %v", got)
+			}
+			if test.id == "kernel.health/v1" {
+				status, ok := definition.Contract().Response().Lookup("status")
+				if !ok || len(status.EnumJSON()) != 0 {
+					t.Fatalf("health status enum = %v, want none", status.EnumJSON())
+				}
 			}
 			if got := definition.Contract().Errors(); len(got) != 0 {
 				t.Fatalf("errors = %v", got)
