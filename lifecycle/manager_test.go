@@ -92,6 +92,204 @@ func TestManagerSupportsNoLifecycleInstances(t *testing.T) {
 	}
 }
 
+func TestManagerCleansEveryConstructedInstance(t *testing.T) {
+	t.Parallel()
+
+	for _, mode := range []string{"before start", "cancelled before start", "start error", "start panic", "start cancellation"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.WithValue(context.Background(), lifecycleContextKey{}, "preserved"))
+			defer cancel()
+			var events []string
+			var bindings []lifecycle.Binding
+			for _, name := range []string{"dependency", "failing", "never-started"} {
+				bindings = append(bindings, lifecycleBinding(t, "example.com/acme/"+name+".New", &testLifecycleInstance{
+					start: func(context.Context) error {
+						events = append(events, "start:"+name)
+						if name == "failing" {
+							switch mode {
+							case "start error":
+								return errors.New("private startup detail")
+							case "start panic":
+								panic("private startup detail")
+							case "start cancellation":
+								cancel()
+							}
+						}
+						return nil
+					},
+					stop: func(cleanup context.Context) error {
+						events = append(events, "stop:"+name)
+						if cleanup.Err() != nil || cleanup.Value(lifecycleContextKey{}) != "preserved" {
+							t.Errorf("cleanup context lost values or inherited cancellation: %v", cleanup.Err())
+						}
+						if mode != "before start" {
+							if deadline, ok := cleanup.Deadline(); !ok || time.Until(deadline) > time.Second {
+								t.Error("rollback context has no bounded deadline")
+							}
+						}
+						return nil
+					},
+				}))
+			}
+			manager := newLifecycleManager(t, bindings)
+			var want []string
+			if mode == "before start" {
+				if err := manager.Stop(ctx); err != nil {
+					t.Fatalf("Stop before Start: %v", err)
+				}
+			} else {
+				if mode == "cancelled before start" {
+					cancel()
+				} else {
+					want = append(want, "start:dependency", "start:failing")
+				}
+				err := manager.Start(ctx)
+				if !errors.Is(err, lifecycle.ErrStart) || strings.Contains(err.Error(), "private") || manager.State() != lifecycle.StateFailed {
+					t.Fatalf("Start = %v, state %s", err, manager.State())
+				}
+				if strings.Contains(mode, "cancel") && !errors.Is(err, context.Canceled) {
+					t.Fatalf("Start cancellation identity lost: %v", err)
+				}
+			}
+			want = append(want, "stop:never-started", "stop:failing", "stop:dependency")
+			if !reflect.DeepEqual(events, want) {
+				t.Fatalf("events = %v, want %v", events, want)
+			}
+			if err := manager.Stop(context.Background()); err != nil || manager.State() != lifecycle.StateStopped || !reflect.DeepEqual(events, want) {
+				t.Fatalf("repeated Stop = %v, state %s, events %v", err, manager.State(), events)
+			}
+		})
+	}
+}
+
+func TestManagerRetriesNeverStartedCleanup(t *testing.T) {
+	t.Parallel()
+
+	for _, mode := range []string{"error", "panic", "deadline", "cancelled stop"} {
+		t.Run(mode, func(t *testing.T) {
+			var events []string
+			attempts := 0
+			manager := newLifecycleManager(t, []lifecycle.Binding{
+				lifecycleBinding(t, "example.com/acme/dependency.New", &testLifecycleInstance{
+					stop: func(context.Context) error { events = append(events, "dependency"); return nil },
+				}),
+				lifecycleBinding(t, "example.com/acme/consumer.New", &testLifecycleInstance{
+					stop: func(ctx context.Context) error {
+						events = append(events, "consumer")
+						attempts++
+						if attempts == 1 {
+							switch mode {
+							case "error":
+								return errors.New("private cleanup detail")
+							case "panic":
+								panic("private cleanup detail")
+							case "deadline":
+								<-ctx.Done()
+								return ctx.Err()
+							}
+						}
+						return nil
+					},
+				}),
+			})
+			timeout := time.Second
+			if mode == "deadline" {
+				timeout = 10 * time.Millisecond
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+			if mode == "cancelled stop" {
+				cancel()
+			}
+			err := manager.Stop(ctx)
+			if !errors.Is(err, lifecycle.ErrStop) || strings.Contains(err.Error(), "private") || manager.State() != lifecycle.StateFailed {
+				t.Fatalf("Stop = %v, state %s", err, manager.State())
+			}
+			if mode == "deadline" && !errors.Is(err, context.DeadlineExceeded) || mode == "cancelled stop" && !errors.Is(err, context.Canceled) {
+				t.Fatalf("Stop lost context cause: %v", err)
+			}
+			if err := manager.Stop(context.Background()); err != nil || manager.State() != lifecycle.StateStopped {
+				t.Fatalf("retry Stop = %v, state %s", err, manager.State())
+			}
+			want := []string{"consumer", "dependency", "consumer"}
+			if mode == "deadline" {
+				want = []string{"consumer", "consumer", "dependency"}
+			} else if mode == "cancelled stop" {
+				want = []string{"consumer", "dependency"}
+			}
+			if !reflect.DeepEqual(events, want) {
+				t.Fatalf("events = %v, want %v", events, want)
+			}
+		})
+	}
+}
+
+func TestManagerRetriesExpiredRollbackOfNeverStartedValues(t *testing.T) {
+	t.Parallel()
+
+	var events []string
+	var attempts int
+	bindings := []lifecycle.Binding{
+		lifecycleBinding(t, "example.com/acme/dependency.New", &testLifecycleInstance{
+			start: func(context.Context) error { return errors.New("private startup detail") },
+			stop:  func(context.Context) error { events = append(events, "dependency"); return nil },
+		}),
+		lifecycleBinding(t, "example.com/acme/consumer.New", &testLifecycleInstance{
+			start: func(context.Context) error { t.Error("consumer must never start"); return nil },
+			stop: func(ctx context.Context) error {
+				events = append(events, "consumer")
+				attempts++
+				if attempts == 1 {
+					<-ctx.Done()
+					return ctx.Err()
+				}
+				return nil
+			},
+		}),
+	}
+	manager, err := lifecycle.NewManager(lifecycle.ManagerOptions{RollbackTimeout: 10 * time.Millisecond}, bindings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = manager.Start(context.Background())
+	if !errors.Is(err, lifecycle.ErrStart) || !errors.Is(err, lifecycle.ErrStop) || !errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "private") {
+		t.Fatalf("expired rollback error = %v", err)
+	}
+	if err := manager.Stop(context.Background()); err != nil || manager.State() != lifecycle.StateStopped {
+		t.Fatalf("retry Stop = %v, state %s", err, manager.State())
+	}
+	if want := []string{"consumer", "consumer", "dependency"}; !reflect.DeepEqual(events, want) {
+		t.Fatalf("events = %v, want %v", events, want)
+	}
+}
+
+func TestManagerSerializesNeverStartedCleanup(t *testing.T) {
+	t.Parallel()
+
+	entered, release := make(chan struct{}), make(chan struct{})
+	manager := newLifecycleManager(t, []lifecycle.Binding{
+		lifecycleBinding(t, "example.com/acme/consumer.New", &testLifecycleInstance{
+			stop: func(context.Context) error { close(entered); <-release; return nil },
+		}),
+	})
+	result := make(chan error, 1)
+	go func() { result <- manager.Stop(context.Background()) }()
+	<-entered
+	if manager.State() != lifecycle.StateStopping {
+		t.Errorf("State = %s, want stopping", manager.State())
+	}
+	if err := manager.Start(context.Background()); !errors.Is(err, lifecycle.ErrState) {
+		t.Errorf("Start during cleanup = %v", err)
+	}
+	if err := manager.Stop(context.Background()); !errors.Is(err, lifecycle.ErrState) {
+		t.Errorf("Stop during cleanup = %v", err)
+	}
+	close(release)
+	if err := <-result; err != nil || manager.State() != lifecycle.StateStopped {
+		t.Fatalf("first Stop = %v, state %s", err, manager.State())
+	}
+}
+
 func TestManagerRejectsInvalidOptionsAndBindings(t *testing.T) {
 	t.Parallel()
 

@@ -17,8 +17,9 @@ var ErrInvalidBinding = errors.New("invalid implementation lifecycle binding")
 
 // Instance is the optional lifecycle surface implemented by an in-process
 // concrete Implementation that owns resources requiring explicit startup and
-// shutdown. Stop must tolerate partially completed startup and be safe to
-// retry after it reports failure.
+// shutdown. Constructors only assemble values; acquisition and background work
+// belong in Start. Stop must tolerate never-started and partially started
+// values and be safe to retry after it reports failure.
 type Instance interface {
 	Start(context.Context) error
 	Stop(context.Context) error

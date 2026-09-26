@@ -58,24 +58,27 @@ type ManagerOptions struct {
 	RollbackTimeout time.Duration
 }
 
-// Manager starts lifecycle instances in generated order and stops active
-// instances in reverse order. It never discovers or reorders Implementations.
+// Manager owns cleanup of every supplied constructed lifecycle instance,
+// starts them in generated order, and stops them in reverse order. It never
+// discovers or reorders Implementations.
 type Manager struct {
 	mu              sync.RWMutex
 	bindings        []Binding
-	active          []bool
+	pendingStop     []bool
 	state           State
 	rollbackTimeout time.Duration
 }
 
 // NewManager validates and defensively copies an already-resolved lifecycle
-// order. Constructor symbols must be unique.
+// order. Constructor symbols must be unique. Every binding is a constructed
+// value requiring Stop, even if Start is never entered.
 func NewManager(options ManagerOptions, bindings []Binding) (*Manager, error) {
 	if options.RollbackTimeout <= 0 {
 		return nil, ErrInvalidManager
 	}
 	seen := make(map[string]struct{}, len(bindings))
 	ordered := make([]Binding, len(bindings))
+	pendingStop := make([]bool, len(bindings))
 	for index, binding := range bindings {
 		if !binding.valid() {
 			return nil, fmt.Errorf("%w: binding %d: %w", ErrInvalidManager, index, ErrInvalidBinding)
@@ -85,10 +88,11 @@ func NewManager(options ManagerOptions, bindings []Binding) (*Manager, error) {
 		}
 		seen[binding.constructor] = struct{}{}
 		ordered[index] = binding
+		pendingStop[index] = true
 	}
 	return &Manager{
 		bindings:        ordered,
-		active:          make([]bool, len(ordered)),
+		pendingStop:     pendingStop,
 		state:           StateNew,
 		rollbackTimeout: options.RollbackTimeout,
 	}, nil
@@ -105,8 +109,8 @@ func (m *Manager) State() State {
 }
 
 // Start invokes instances in the exact generated order. A failure triggers a
-// bounded reverse-order rollback that includes the failing instance in case it
-// acquired resources before returning or panicking.
+// bounded reverse-order rollback of all constructed instances, including the
+// failing instance and instances whose Start was never entered.
 func (m *Manager) Start(ctx context.Context) error {
 	if m == nil {
 		return ErrInvalidManager
@@ -118,19 +122,19 @@ func (m *Manager) Start(ctx context.Context) error {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
+		rollback := m.rollback(ctx)
 		m.setState(StateFailed)
-		return operationFailure(ErrStart, "", err)
+		return errors.Join(operationFailure(ErrStart, "", err), rollback)
 	}
 
-	for index, binding := range m.bindings {
+	for _, binding := range m.bindings {
 		if err := ctx.Err(); err != nil {
-			rollback := m.rollback(ctx, index-1)
+			rollback := m.rollback(ctx)
 			m.setState(StateFailed)
 			return errors.Join(operationFailure(ErrStart, "", err), rollback)
 		}
-		m.active[index] = true
 		if err := invokeHook(ctx, binding.instance.Start); err != nil {
-			rollback := m.rollback(ctx, index)
+			rollback := m.rollback(ctx)
 			m.setState(StateFailed)
 			return errors.Join(operationFailure(ErrStart, "constructor "+binding.constructor, err), rollback)
 		}
@@ -139,9 +143,9 @@ func (m *Manager) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop invokes every active instance in reverse generated order. Successful
-// instances are not called again; failed stops may be retried by calling Stop
-// with a fresh context.
+// Stop invokes every constructed instance still requiring cleanup in reverse
+// generated order, including before Start. Successful instances are not called
+// again; failed stops may be retried by calling Stop with a fresh context.
 func (m *Manager) Stop(ctx context.Context) error {
 	if m == nil {
 		return ErrInvalidManager
@@ -152,14 +156,10 @@ func (m *Manager) Stop(ctx context.Context) error {
 
 	m.mu.Lock()
 	switch m.state {
-	case StateNew:
-		m.state = StateStopped
-		m.mu.Unlock()
-		return nil
 	case StateStopped:
 		m.mu.Unlock()
 		return nil
-	case StateRunning, StateFailed:
+	case StateNew, StateRunning, StateFailed:
 		m.state = StateStopping
 		m.mu.Unlock()
 	default:
@@ -168,7 +168,7 @@ func (m *Manager) Stop(ctx context.Context) error {
 		return stateFailure("stop", state)
 	}
 
-	err := m.stopActive(ctx, len(m.bindings)-1)
+	err := m.stopPending(ctx)
 	if err != nil {
 		m.setState(StateFailed)
 		return err
@@ -193,20 +193,17 @@ func (m *Manager) setState(state State) {
 	m.mu.Unlock()
 }
 
-func (m *Manager) rollback(parent context.Context, last int) error {
-	if last < 0 {
-		return nil
-	}
+func (m *Manager) rollback(parent context.Context) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), m.rollbackTimeout)
 	defer cancel()
-	return m.stopActive(ctx, last)
+	return m.stopPending(ctx)
 }
 
-func (m *Manager) stopActive(ctx context.Context, last int) error {
+func (m *Manager) stopPending(ctx context.Context) error {
 	failed := make([]string, 0)
 	var cause error
-	for index := last; index >= 0; index-- {
-		if !m.active[index] {
+	for index := len(m.bindings) - 1; index >= 0; index-- {
+		if !m.pendingStop[index] {
 			continue
 		}
 		binding := m.bindings[index]
@@ -217,7 +214,7 @@ func (m *Manager) stopActive(ctx context.Context, last int) error {
 			}
 			continue
 		}
-		m.active[index] = false
+		m.pendingStop[index] = false
 	}
 	if len(failed) == 0 {
 		return nil

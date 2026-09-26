@@ -53,11 +53,11 @@ Go plugins share one process and are not sandboxed. Generated Capability clients
 
 Typed contracts declare their exact semantic error codes. Generated semantic error types satisfy `capability.SemanticError` by reporting their code through `SemanticErrorCode() string`; at the provider endpoint, the Kernel preserves only a reported code declared by that same contract and converts it into an immutable provider-neutral `invocation.SemanticError`. Undeclared, malformed, or panicking semantic claims are normalized to `internal`; provider messages and causes never cross the boundary. Standard classified `invocation.Error` values and cancellation or deadline identities retain their existing safe behavior.
 
-## Provider lifecycle
+## Implementation lifecycle
 
-Plugins that own resources requiring explicit startup and shutdown may implement `lifecycle.Provider`. Generated assembly binds only those plugins and supplies their already-resolved deterministic order; the Kernel does not discover providers or recompute dependencies at runtime. Plugins without lifecycle work remain valid and need no lifecycle methods.
+Implementations that own resources requiring explicit startup and shutdown implement `lifecycle.Instance`. Constructors only assemble values and store configuration and dependencies; resource acquisition and background work belong in `Start`. Generated assembly supplies constructed lifecycle values in dependency order through `lifecycle.NewBinding` and `lifecycle.NewManager`; the Kernel does not discover Implementations or recompute dependencies. Values without lifecycle work need no lifecycle methods.
 
-The lifecycle manager starts providers in generated order and stops them in reverse order. Failed startup performs a bounded reverse-order rollback, including the failing provider in case it acquired resources before returning. Shutdown attempts every active provider, permits retry only for providers whose stop failed, recovers panics, and exposes only safe Plugin IDs and standard context cancellation or deadline causes rather than provider error text.
+The lifecycle manager owns cleanup of every supplied constructed value from creation, including before `Start`. It starts values in generated order and stops them in reverse order. Startup cancellation, error, or panic performs bounded rollback of all constructed values, including the failing value and values whose `Start` was never entered. Rollback preserves context values but uses a fresh timeout independent of startup cancellation. `Stop` must tolerate never-started and partially started values. Cleanup attempts every pending value, skips successful stops on later calls, and leaves failed stops retryable with a fresh context. Errors and panics expose only safe constructor symbols and standard context cancellation or deadline causes, never Implementation error text.
 
 ## Context and configuration
 
