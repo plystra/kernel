@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/plystra/kernel/capability"
+	"github.com/plystra/kernel/contextmetadata"
 )
 
 type invokeRequest struct {
@@ -51,6 +52,31 @@ func TestHandleInvokeRunsCompleteRawDispatchPath(t *testing.T) {
 	}
 	if _, exists := RequestIDFromContext(harness.root); exists {
 		t.Fatal("Invoke mutated its caller context")
+	}
+}
+
+func TestHandleInvokePreservesOpaqueMetadataWithDefensiveReads(t *testing.T) {
+	t.Parallel()
+	contract := capability.MustParseContract[invokeRequest, invokeResponse]("example.metadata/v1")
+	harness := newInvokeHarness(t, contract, func(ctx context.Context, request invokeRequest) (invokeResponse, error) {
+		value, exists, err := contextmetadata.Bytes(ctx, "example.opaque/v1")
+		if err != nil || !exists || string(value) != "private metadata" {
+			t.Fatalf("governed metadata = %q %t %v", value, exists, err)
+		}
+		value[0] = 'X'
+		return invokeResponse(request), nil
+	}, invokeHarnessOptions{})
+	ctx, err := contextmetadata.WithBytes(harness.root, "example.opaque/v1", []byte("private metadata"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := harness.handle.Invoke(ctx, invokeRequest{Value: "ordinary request"})
+	if err != nil || response.Value != "ordinary request" {
+		t.Fatalf("Invoke = %#v %v", response, err)
+	}
+	value, exists, err := contextmetadata.Bytes(ctx, "example.opaque/v1")
+	if err != nil || !exists || string(value) != "private metadata" {
+		t.Fatalf("caller metadata = %q %t %v", value, exists, err)
 	}
 }
 
