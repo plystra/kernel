@@ -133,7 +133,11 @@ func (m *Manager) Start(ctx context.Context) error {
 			m.setState(StateFailed)
 			return errors.Join(operationFailure(ErrStart, "", err), rollback)
 		}
-		if err := invokeHook(ctx, binding.instance.Start); err != nil {
+		err := invokeHook(ctx, binding.instance.Start)
+		if contextErr := ctx.Err(); contextErr != nil {
+			err = contextErr
+		}
+		if err != nil {
 			rollback := m.rollback(ctx)
 			m.setState(StateFailed)
 			return errors.Join(operationFailure(ErrStart, "constructor "+binding.constructor, err), rollback)
@@ -146,6 +150,8 @@ func (m *Manager) Start(ctx context.Context) error {
 // Stop invokes every constructed instance still requiring cleanup in reverse
 // generated order, including before Start. Successful instances are not called
 // again; failed stops may be retried by calling Stop with a fresh context.
+// A hook returning nil confirms cleanup even if its context was cancelled
+// during execution; cancellation still prevents entering remaining hooks.
 func (m *Manager) Stop(ctx context.Context) error {
 	if m == nil {
 		return ErrInvalidManager
@@ -232,10 +238,10 @@ func invokeHook(ctx context.Context, hook func(context.Context) error) (err erro
 		}
 	}()
 	hookErr := hook(ctx)
-	if err := ctx.Err(); err != nil {
-		return err
-	}
 	if hookErr != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		return errInstanceHook
 	}
 	return nil

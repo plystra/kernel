@@ -263,6 +263,35 @@ func TestManagerRetriesExpiredRollbackOfNeverStartedValues(t *testing.T) {
 	}
 }
 
+func TestManagerDoesNotRepeatSuccessfulStopAfterContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var events []string
+	manager := newLifecycleManager(t, []lifecycle.Binding{
+		lifecycleBinding(t, "example.com/acme/dependency.New", &testLifecycleInstance{
+			stop: func(context.Context) error { events = append(events, "dependency"); return nil },
+		}),
+		lifecycleBinding(t, "example.com/acme/consumer.New", &testLifecycleInstance{
+			stop: func(context.Context) error {
+				events = append(events, "consumer")
+				cancel()
+				return nil
+			},
+		}),
+	})
+	if err := manager.Stop(ctx); !errors.Is(err, lifecycle.ErrStop) || !errors.Is(err, context.Canceled) {
+		t.Fatalf("Stop before pending dependency cleanup = %v", err)
+	}
+	if err := manager.Stop(context.Background()); err != nil || manager.State() != lifecycle.StateStopped {
+		t.Fatalf("retry Stop = %v, state %s", err, manager.State())
+	}
+	if want := []string{"consumer", "dependency"}; !reflect.DeepEqual(events, want) {
+		t.Fatalf("events = %v, want %v", events, want)
+	}
+}
+
 func TestManagerSerializesNeverStartedCleanup(t *testing.T) {
 	t.Parallel()
 
@@ -287,6 +316,28 @@ func TestManagerSerializesNeverStartedCleanup(t *testing.T) {
 	close(release)
 	if err := <-result; err != nil || manager.State() != lifecycle.StateStopped {
 		t.Fatalf("first Stop = %v, state %s", err, manager.State())
+	}
+}
+
+func TestManagerAcceptsCompletedFinalStopDespiteCancellation(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stops := 0
+	manager := newLifecycleManager(t, []lifecycle.Binding{
+		lifecycleBinding(t, "example.com/acme/consumer.New", &testLifecycleInstance{
+			stop: func(context.Context) error { stops++; cancel(); return nil },
+		}),
+	})
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Stop(ctx); err != nil || manager.State() != lifecycle.StateStopped {
+		t.Fatalf("completed Stop = %v, state %s", err, manager.State())
+	}
+	if err := manager.Stop(context.Background()); err != nil || stops != 1 {
+		t.Fatalf("repeated Stop = %v, stops %d", err, stops)
 	}
 }
 
