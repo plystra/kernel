@@ -17,6 +17,7 @@ type SemanticError struct {
 	code       string
 	cause      error
 	completion Completion
+	attempts   int
 }
 
 // NewSemanticError creates a semantic result for validation by the invoked
@@ -57,6 +58,14 @@ func (e *SemanticError) Unwrap() error {
 // Completion preserves uncertainty anywhere in the bounded private cause tree.
 func (e *SemanticError) Completion() Completion { return CompletionOf(e) }
 
+// Attempts reports this logical invocation's bounded policy attempt count.
+func (e *SemanticError) Attempts() int {
+	if !e.valid() {
+		return 0
+	}
+	return e.attempts
+}
+
 // Format omits private causes for every fmt verb, including %#v.
 func (e SemanticError) Format(state fmt.State, _ rune) { fmt.Fprint(state, e.Error()) }
 
@@ -64,5 +73,5 @@ func (e SemanticError) Format(state fmt.State, _ rune) { fmt.Fprint(state, e.Err
 func (e SemanticError) LogValue() slog.Value { return slog.StringValue(e.Error()) }
 
 func (e *SemanticError) valid() bool {
-	return e != nil && capability.ValidSemanticErrorCode(e.code) && e.completion.Valid()
+	return e != nil && capability.ValidSemanticErrorCode(e.code) && e.completion.Valid() && e.attempts >= 0 && e.attempts <= MaximumRetryAttempts
 }

@@ -16,6 +16,7 @@ type Error struct {
 	detailCode string
 	cause      error
 	completion Completion
+	attempts   int
 }
 
 // NewError creates one safe classified capability failure. Denials require a
@@ -89,13 +90,22 @@ func (e *Error) Completion() Completion {
 	return e.completion
 }
 
+// Attempts reports policy attempts, including admission rejection, or zero
+// before the attempt loop. It never inherits a nested invocation's count.
+func (e *Error) Attempts() int {
+	if !e.valid() {
+		return 0
+	}
+	return e.attempts
+}
+
 // Is preserves only the safe standard cancellation and deadline identities.
 func (e *Error) Is(target error) bool {
 	return e.valid() && e.cause != nil && target != nil && errors.Is(e.cause, target)
 }
 
 func (e *Error) valid() bool {
-	if e == nil || !e.code.Valid() || !ValidDetailCode(e.detailCode) || !e.completion.Valid() {
+	if e == nil || !e.code.Valid() || !ValidDetailCode(e.detailCode) || !e.completion.Valid() || e.attempts < 0 || e.attempts > MaximumRetryAttempts {
 		return false
 	}
 	if e.code == ErrorDenied && e.detailCode == "" {

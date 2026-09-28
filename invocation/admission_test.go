@@ -46,7 +46,7 @@ func checkConcurrencyLimit(t *testing.T, limit int) {
 	if err != nil || binding.ConcurrencyLimit() != limit {
 		t.Fatalf("limit %d = %d, %v", limit, binding.ConcurrencyLimit(), err)
 	}
-	options.ConcurrencyLimit = 0
+	options.Policy.ConcurrencyLimit = 0
 	catalog, err := invocation.NewCatalog([]invocation.Binding{binding})
 	if err != nil {
 		t.Fatal(err)
@@ -167,15 +167,15 @@ func TestAdmissionIsSharedByHandlesButNotBindingsOrDispatchers(t *testing.T) {
 			capability.MustParseContract[string, string]("example.admission/v2"),
 		}
 		bindings := []invocation.Binding{
-			admissionBinding(t, contracts[0], 1, handler),
-			admissionBinding(t, contracts[1], 1, handler),
+			admissionBinding(t, contracts[0], 1, time.Minute, handler),
+			admissionBinding(t, contracts[1], 1, time.Minute, handler),
 		}
 		catalog, err := invocation.NewCatalog(bindings)
 		if err != nil {
 			t.Fatal(err)
 		}
-		first := admissionDispatcher(t, catalog, time.Minute)
-		second := admissionDispatcher(t, catalog, time.Minute)
+		first := admissionDispatcher(t, catalog)
+		second := admissionDispatcher(t, catalog)
 		var handles []invocation.Handle[string, string]
 		for _, dispatcher := range []*invocation.Dispatcher{first, second} {
 			for _, contract := range contracts {
@@ -378,26 +378,28 @@ func admissionBindingOptions(t testing.TB, limit int) invocation.BindingOptions 
 	return invocation.BindingOptions{
 		Kind: invocation.BindingKindImplementation, Constructor: "github.com/acme/admission.New",
 		ModuleBuild: build, SelectionReason: invocation.SelectionReasonUniqueCompatible,
-		ContractDigest: sha256.Sum256([]byte("admission-contract")), ConcurrencyLimit: limit,
+		ContractDigest: sha256.Sum256([]byte("admission-contract")), Policy: publicPolicy(time.Minute, limit),
 	}
 }
 
-func admissionBinding(t testing.TB, contract capability.Contract[string, string], limit int, handler capability.Handler[string, string]) invocation.Binding {
+func admissionBinding(t testing.TB, contract capability.Contract[string, string], limit int, timeout time.Duration, handler capability.Handler[string, string]) invocation.Binding {
 	t.Helper()
 	endpoint, err := invocation.NewEndpoint(contract, handler)
 	if err != nil {
 		t.Fatal(err)
 	}
-	binding, err := invocation.NewBinding(admissionBindingOptions(t, limit), endpoint)
+	options := admissionBindingOptions(t, limit)
+	options.Policy.Timeout = timeout
+	binding, err := invocation.NewBinding(options, endpoint)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return binding
 }
 
-func admissionDispatcher(t testing.TB, catalog invocation.Catalog, timeout time.Duration) *invocation.Dispatcher {
+func admissionDispatcher(t testing.TB, catalog invocation.Catalog) *invocation.Dispatcher {
 	t.Helper()
-	dispatcher, err := invocation.NewDispatcher(invocation.DispatcherOptions{DefaultTimeout: timeout})
+	dispatcher, err := invocation.NewDispatcher(invocation.DispatcherOptions{PolicyVersion: invocation.PolicySchemaVersion})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -414,13 +416,13 @@ func admissionRuntime(t testing.TB, limit int, timeout time.Duration, handler ca
 	for _, id := range ids {
 		contract := capability.MustParseContract[string, string](id)
 		contracts = append(contracts, contract)
-		bindings = append(bindings, admissionBinding(t, contract, limit, handler))
+		bindings = append(bindings, admissionBinding(t, contract, limit, timeout, handler))
 	}
 	catalog, err := invocation.NewCatalog(bindings)
 	if err != nil {
 		t.Fatal(err)
 	}
-	dispatcher := admissionDispatcher(t, catalog, timeout)
+	dispatcher := admissionDispatcher(t, catalog)
 	var handles []invocation.Handle[string, string]
 	for _, contract := range contracts {
 		handle, err := invocation.NewHandle(dispatcher, contract, true)

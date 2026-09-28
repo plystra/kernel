@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/plystra/kernel/capability"
 )
@@ -59,12 +60,12 @@ func TestCatalogCopiesResolvedImplementationBindings(t *testing.T) {
 	moduleBuild := mustModuleBuild(t, "github.com/acme/email", "v1.4.2", "git:0123456789abcdef")
 	digest := sha256.Sum256([]byte("email.send/v1 schema"))
 	binding, err := NewBinding(BindingOptions{
-		ConcurrencyLimit: 256,
-		Kind:             BindingKindImplementation,
-		Constructor:      "github.com/acme/email/smtp.New",
-		ModuleBuild:      moduleBuild,
-		SelectionReason:  SelectionReasonExplicit,
-		ContractDigest:   digest,
+		Policy:          testPolicy(time.Second, 256),
+		Kind:            BindingKindImplementation,
+		Constructor:     "github.com/acme/email/smtp.New",
+		ModuleBuild:     moduleBuild,
+		SelectionReason: SelectionReasonExplicit,
+		ContractDigest:  digest,
 	}, endpoint)
 	if err != nil {
 		t.Fatalf("NewBinding: %v", err)
@@ -100,11 +101,11 @@ func TestCatalogSupportsIntrinsicBindingWithoutConstructor(t *testing.T) {
 	}
 	moduleBuild := mustModuleBuild(t, "github.com/plystra/kernel", "v0.1.0", "")
 	binding, err := NewBinding(BindingOptions{
-		ConcurrencyLimit: 256,
-		Kind:             BindingKindIntrinsic,
-		ModuleBuild:      moduleBuild,
-		SelectionReason:  SelectionReasonIntrinsic,
-		ContractDigest:   sha256.Sum256([]byte("kernel.health/v1 schema")),
+		Policy:          testPolicy(time.Second, 256),
+		Kind:            BindingKindIntrinsic,
+		ModuleBuild:     moduleBuild,
+		SelectionReason: SelectionReasonIntrinsic,
+		ContractDigest:  sha256.Sum256([]byte("kernel.health/v1 schema")),
 	}, endpoint)
 	if err != nil {
 		t.Fatalf("NewBinding: %v", err)
@@ -132,23 +133,23 @@ func TestNewBindingRejectsInvalidMetadata(t *testing.T) {
 	}
 	moduleBuild := mustModuleBuild(t, "github.com/acme/example", "v1.0.0", "")
 	digest := sha256.Sum256([]byte("example.operation/v1 schema"))
-	validImplementation := BindingOptions{ConcurrencyLimit: 256, Kind: BindingKindImplementation, Constructor: "github.com/acme/example/provider.New", ModuleBuild: moduleBuild, SelectionReason: SelectionReasonUniqueCompatible, ContractDigest: digest}
+	validImplementation := BindingOptions{Policy: testPolicy(time.Second, 256), Kind: BindingKindImplementation, Constructor: "github.com/acme/example/provider.New", ModuleBuild: moduleBuild, SelectionReason: SelectionReasonUniqueCompatible, ContractDigest: digest}
 	tests := []struct {
 		name     string
 		options  BindingOptions
 		endpoint Endpoint
 	}{
 		{name: "zero endpoint", options: validImplementation},
-		{name: "zero digest", options: BindingOptions{ConcurrencyLimit: 256, Kind: BindingKindImplementation, Constructor: "github.com/acme/example/provider.New", ModuleBuild: moduleBuild, SelectionReason: SelectionReasonUniqueCompatible}, endpoint: endpoint},
-		{name: "zero module build", options: BindingOptions{ConcurrencyLimit: 256, Kind: BindingKindImplementation, Constructor: "github.com/acme/example/provider.New", SelectionReason: SelectionReasonUniqueCompatible, ContractDigest: digest}, endpoint: endpoint},
-		{name: "missing constructor", options: BindingOptions{ConcurrencyLimit: 256, Kind: BindingKindImplementation, ModuleBuild: moduleBuild, SelectionReason: SelectionReasonUniqueCompatible, ContractDigest: digest}, endpoint: endpoint},
-		{name: "unexported constructor", options: BindingOptions{ConcurrencyLimit: 256, Kind: BindingKindImplementation, Constructor: "github.com/acme/example/provider.new", ModuleBuild: moduleBuild, SelectionReason: SelectionReasonUniqueCompatible, ContractDigest: digest}, endpoint: endpoint},
-		{name: "constructor outside module", options: BindingOptions{ConcurrencyLimit: 256, Kind: BindingKindImplementation, Constructor: "github.com/other/provider.New", ModuleBuild: moduleBuild, SelectionReason: SelectionReasonUniqueCompatible, ContractDigest: digest}, endpoint: endpoint},
-		{name: "unknown binding kind", options: BindingOptions{ConcurrencyLimit: 256, Constructor: "github.com/acme/example/provider.New", ModuleBuild: moduleBuild, SelectionReason: SelectionReasonUniqueCompatible, ContractDigest: digest}, endpoint: endpoint},
-		{name: "missing selection reason", options: BindingOptions{ConcurrencyLimit: 256, Kind: BindingKindImplementation, Constructor: "github.com/acme/example/provider.New", ModuleBuild: moduleBuild, ContractDigest: digest}, endpoint: endpoint},
-		{name: "intrinsic with constructor", options: BindingOptions{ConcurrencyLimit: 256, Kind: BindingKindIntrinsic, Constructor: "github.com/acme/example/provider.New", ModuleBuild: moduleBuild, SelectionReason: SelectionReasonIntrinsic, ContractDigest: digest}, endpoint: endpoint},
-		{name: "intrinsic with ordinary selection", options: BindingOptions{ConcurrencyLimit: 256, Kind: BindingKindIntrinsic, ModuleBuild: moduleBuild, SelectionReason: SelectionReasonUniqueCompatible, ContractDigest: digest}, endpoint: endpoint},
-		{name: "Implementation with intrinsic selection", options: BindingOptions{ConcurrencyLimit: 256, Kind: BindingKindImplementation, Constructor: "github.com/acme/example/provider.New", ModuleBuild: moduleBuild, SelectionReason: SelectionReasonIntrinsic, ContractDigest: digest}, endpoint: endpoint},
+		{name: "zero digest", options: BindingOptions{Policy: testPolicy(time.Second, 256), Kind: BindingKindImplementation, Constructor: "github.com/acme/example/provider.New", ModuleBuild: moduleBuild, SelectionReason: SelectionReasonUniqueCompatible}, endpoint: endpoint},
+		{name: "zero module build", options: BindingOptions{Policy: testPolicy(time.Second, 256), Kind: BindingKindImplementation, Constructor: "github.com/acme/example/provider.New", SelectionReason: SelectionReasonUniqueCompatible, ContractDigest: digest}, endpoint: endpoint},
+		{name: "missing constructor", options: BindingOptions{Policy: testPolicy(time.Second, 256), Kind: BindingKindImplementation, ModuleBuild: moduleBuild, SelectionReason: SelectionReasonUniqueCompatible, ContractDigest: digest}, endpoint: endpoint},
+		{name: "unexported constructor", options: BindingOptions{Policy: testPolicy(time.Second, 256), Kind: BindingKindImplementation, Constructor: "github.com/acme/example/provider.new", ModuleBuild: moduleBuild, SelectionReason: SelectionReasonUniqueCompatible, ContractDigest: digest}, endpoint: endpoint},
+		{name: "constructor outside module", options: BindingOptions{Policy: testPolicy(time.Second, 256), Kind: BindingKindImplementation, Constructor: "github.com/other/provider.New", ModuleBuild: moduleBuild, SelectionReason: SelectionReasonUniqueCompatible, ContractDigest: digest}, endpoint: endpoint},
+		{name: "unknown binding kind", options: BindingOptions{Policy: testPolicy(time.Second, 256), Constructor: "github.com/acme/example/provider.New", ModuleBuild: moduleBuild, SelectionReason: SelectionReasonUniqueCompatible, ContractDigest: digest}, endpoint: endpoint},
+		{name: "missing selection reason", options: BindingOptions{Policy: testPolicy(time.Second, 256), Kind: BindingKindImplementation, Constructor: "github.com/acme/example/provider.New", ModuleBuild: moduleBuild, ContractDigest: digest}, endpoint: endpoint},
+		{name: "intrinsic with constructor", options: BindingOptions{Policy: testPolicy(time.Second, 256), Kind: BindingKindIntrinsic, Constructor: "github.com/acme/example/provider.New", ModuleBuild: moduleBuild, SelectionReason: SelectionReasonIntrinsic, ContractDigest: digest}, endpoint: endpoint},
+		{name: "intrinsic with ordinary selection", options: BindingOptions{Policy: testPolicy(time.Second, 256), Kind: BindingKindIntrinsic, ModuleBuild: moduleBuild, SelectionReason: SelectionReasonUniqueCompatible, ContractDigest: digest}, endpoint: endpoint},
+		{name: "Implementation with intrinsic selection", options: BindingOptions{Policy: testPolicy(time.Second, 256), Kind: BindingKindImplementation, Constructor: "github.com/acme/example/provider.New", ModuleBuild: moduleBuild, SelectionReason: SelectionReasonIntrinsic, ContractDigest: digest}, endpoint: endpoint},
 	}
 	for _, test := range tests {
 		test := test
@@ -180,11 +181,11 @@ func TestNewCatalogRejectsInvalidAndDuplicateBindings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEndpoint second: %v", err)
 	}
-	first, err := NewBinding(BindingOptions{ConcurrencyLimit: 256, Kind: BindingKindImplementation, Constructor: "github.com/acme/example/provider.New", ModuleBuild: moduleBuild, SelectionReason: SelectionReasonUniqueCompatible, ContractDigest: digest}, firstEndpoint)
+	first, err := NewBinding(BindingOptions{Policy: testPolicy(time.Second, 256), Kind: BindingKindImplementation, Constructor: "github.com/acme/example/provider.New", ModuleBuild: moduleBuild, SelectionReason: SelectionReasonUniqueCompatible, ContractDigest: digest}, firstEndpoint)
 	if err != nil {
 		t.Fatalf("NewBinding first: %v", err)
 	}
-	second, err := NewBinding(BindingOptions{ConcurrencyLimit: 256, Kind: BindingKindImplementation, Constructor: "github.com/acme/example/provider.New", ModuleBuild: moduleBuild, SelectionReason: SelectionReasonUniqueCompatible, ContractDigest: digest}, secondEndpoint)
+	second, err := NewBinding(BindingOptions{Policy: testPolicy(time.Second, 256), Kind: BindingKindImplementation, Constructor: "github.com/acme/example/provider.New", ModuleBuild: moduleBuild, SelectionReason: SelectionReasonUniqueCompatible, ContractDigest: digest}, secondEndpoint)
 	if err != nil {
 		t.Fatalf("NewBinding second: %v", err)
 	}
@@ -339,12 +340,12 @@ func benchmarkCatalog(b *testing.B) (Catalog, capability.Identifier) {
 		b.Fatalf("NewEndpoint: %v", err)
 	}
 	binding, err := NewBinding(BindingOptions{
-		ConcurrencyLimit: 256,
-		Kind:             BindingKindImplementation,
-		Constructor:      "github.com/acme/example/provider.New",
-		ModuleBuild:      mustModuleBuildBenchmark(b, "github.com/acme/example", "v1.0.0", ""),
-		SelectionReason:  SelectionReasonUniqueCompatible,
-		ContractDigest:   sha256.Sum256([]byte("example.benchmark/v1 schema")),
+		Policy:          testPolicy(time.Second, 256),
+		Kind:            BindingKindImplementation,
+		Constructor:     "github.com/acme/example/provider.New",
+		ModuleBuild:     mustModuleBuildBenchmark(b, "github.com/acme/example", "v1.0.0", ""),
+		SelectionReason: SelectionReasonUniqueCompatible,
+		ContractDigest:  sha256.Sum256([]byte("example.benchmark/v1 schema")),
 	}, endpoint)
 	if err != nil {
 		b.Fatalf("NewBinding: %v", err)
@@ -364,12 +365,12 @@ func testBinding(t *testing.T, identifier string) Binding {
 		t.Fatalf("NewEndpoint: %v", err)
 	}
 	binding, err := NewBinding(BindingOptions{
-		ConcurrencyLimit: 256,
-		Kind:             BindingKindImplementation,
-		Constructor:      "github.com/acme/example/provider.New",
-		ModuleBuild:      mustModuleBuild(t, "github.com/acme/example", "v1.0.0", ""),
-		SelectionReason:  SelectionReasonUniqueCompatible,
-		ContractDigest:   sha256.Sum256([]byte(identifier + " schema")),
+		Policy:          testPolicy(time.Second, 256),
+		Kind:            BindingKindImplementation,
+		Constructor:     "github.com/acme/example/provider.New",
+		ModuleBuild:     mustModuleBuild(t, "github.com/acme/example", "v1.0.0", ""),
+		SelectionReason: SelectionReasonUniqueCompatible,
+		ContractDigest:  sha256.Sum256([]byte(identifier + " schema")),
 	}, endpoint)
 	if err != nil {
 		t.Fatalf("NewBinding: %v", err)

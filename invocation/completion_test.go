@@ -396,7 +396,7 @@ func TestAllPublicPreDispatchRejectionsAreNotStarted(t *testing.T) {
 		return "", nil
 	})
 	contract := capability.MustParseContract[error, string]("example.unpublished/v1")
-	dispatcher, err := invocation.NewDispatcher(invocation.DispatcherOptions{DefaultTimeout: time.Second})
+	dispatcher, err := invocation.NewDispatcher(invocation.DispatcherOptions{PolicyVersion: invocation.PolicySchemaVersion})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -579,8 +579,8 @@ func publicResponseRuntime[Response any](t testing.TB, timeout time.Duration, ha
 	binding, err := invocation.NewBinding(invocation.BindingOptions{
 		Kind: invocation.BindingKindImplementation, Constructor: "github.com/acme/errors/implementation.New",
 		ModuleBuild: build, SelectionReason: invocation.SelectionReasonUniqueCompatible,
-		ContractDigest:   sha256.Sum256([]byte("error-boundary-contract")),
-		ConcurrencyLimit: 256,
+		ContractDigest: sha256.Sum256([]byte("error-boundary-contract")),
+		Policy:         publicPolicy(timeout, 256),
 	}, endpoint)
 	if err != nil {
 		t.Fatal(err)
@@ -589,7 +589,7 @@ func publicResponseRuntime[Response any](t testing.TB, timeout time.Duration, ha
 	if err != nil {
 		t.Fatal(err)
 	}
-	dispatcher, err := invocation.NewDispatcher(invocation.DispatcherOptions{DefaultTimeout: timeout})
+	dispatcher, err := invocation.NewDispatcher(invocation.DispatcherOptions{PolicyVersion: invocation.PolicySchemaVersion})
 	if err != nil {
 		t.Fatal(err)
 	}

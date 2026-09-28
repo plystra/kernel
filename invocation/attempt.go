@@ -33,7 +33,7 @@ func (d *Dispatcher) registerAttempt(ctx context.Context, attempt *targetAttempt
 		return newNotStartedBoundary(ErrorUnavailable, detailDispatcherDraining)
 	}
 	identifier := binding.endpoint.definition.Identifier()
-	if d.inflight[identifier] >= binding.concurrencyLimit {
+	if d.inflight[identifier] >= binding.policy.ConcurrencyLimit {
 		return newNotStartedBoundary(ErrorResourceExhausted, detailConcurrencyExhausted)
 	}
 	attempt.bindingID = identifier
@@ -45,7 +45,7 @@ func (d *Dispatcher) registerAttempt(ctx context.Context, attempt *targetAttempt
 func (d *Dispatcher) enterAttempt(ctx context.Context, attempt *targetAttempt) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.draining || attempt.abandoned || ctx.Err() != nil {
+	if d.draining || attempt.abandoned || invocationContextError(ctx) != nil {
 		return false
 	}
 	attempt.entered = true
@@ -119,6 +119,7 @@ func (d *Dispatcher) Drain(ctx context.Context) error {
 	cancels := make([]func(), 0, len(d.attempts))
 	if !d.draining {
 		d.draining = true
+		close(d.closing)
 		for attempt := range d.attempts {
 			cancels = append(cancels, attempt.cancel)
 		}

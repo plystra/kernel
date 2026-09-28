@@ -144,18 +144,73 @@ does not inspect or copy application fields itself.
 
 Generated consumer evidence is tracked separately in the philosophy roadmap;
 this Kernel boundary alone does not establish lifecycle-hook dependency access,
-retry governance, or separate telemetry events.
+generated policy execution, or separate telemetry events.
+
+### Compiled invocation policies
+
+`BindingOptions.Policy` supplies the complete typed `invocation.Policy` value.
+The immutable binding copies it and returns defensive value copies through
+`Binding.Policy()`. Schema, compiler-protocol, and defaults versions must match
+`PolicySchemaVersion`, `PolicyCompilerVersion`, and `PolicyDefaultsVersion`.
+These are compatibility protocol versions, not Go Module release versions.
+`DispatcherOptions.PolicyVersion` must match the supported schema. Unknown
+versions, missing resolved defaults, unknown retry eligibility, and unsupported
+stages fail before catalog publication; errors contain no rejected values.
+
+Every policy supplies a positive `ConcurrencyLimit` and explicit
+`RetryPolicy{MaxAttempts: 1}` when retries are disabled. The absence-default
+contract is no policy timeout, concurrency 64, queue zero, one attempt, and a
+disabled circuit. `Timeout: 0` adds no deadline. A positive timeout bounds the
+entire logical call and respects an earlier caller or inherited deadline.
+`MaximumPolicyDuration` is the greatest positive Go duration. Positive or
+negative queue limits and any nonzero `CircuitPolicy` are rejected; queueing
+and circuit execution are not implemented.
+
+Retries require `Eligibility: invocation.RetryReplaySafe`, a positive timeout,
+2 through `MaximumRetryAttempts` (16) attempts, and nonnegative backoff. The
+first retry-enabled binding in a nested call chain owns all framework retries;
+nested bindings retain their own timeout and concurrency but execute once.
+Retry ownership is bounded Kernel-owned context state. `invocation.Current`
+exposes the owner and one-based attempt number without changing application
+identity or serializing metadata. A single logical invocation keeps its
+invocation ID across attempts; nested calls retain ordinary ancestry.
+
+Only pre-entry admission exhaustion and known target `unavailable` or
+`resource_exhausted` outcomes may retry. Semantic errors, cancellation, timeout,
+panic, internal/validation failures, and uncertain results never retry. The
+next attempt waits for actual prior-target termination and interruptible
+backoff under the original deadline. Late targets and response processors retain
+their admission permits and cannot cause a retry after caller completion.
+Shutdown interrupts backoff, closes admission, and drains retained targets.
+Safe runtime and semantic errors expose `Attempts()`; zero means rejection
+before the attempt loop. Exhaustion retains the final code and detail; a later
+pre-entry rejection cannot erase an earlier known target result. Attempt
+evidence is copied onto returned errors without mutating
+shared source errors, so error pointer identity is not preserved.
+
+Generated proxies use `Handle.InvokeWithPreparation` to start the budget before
+their synchronous bounded request validator/copier. Preparation creates one
+immutable snapshot and runs once. Each endpoint adapter must copy it into fresh
+target-owned storage for each attempt; the Kernel never reflects over or copies
+application graphs. Its tracked response processor uses the same contract as
+`InvokeWithResponse`. Preparation failures never enter a target, and an expired
+budget cannot admit work merely because the context timer has not fired yet.
+Raw `Invoke` and `InvokeWithResponse` callers must supply their own immutable
+snapshot and adapter copying when enabling retries.
+
+This is a breaking assembly API change: the old dispatcher `DefaultTimeout`
+and standalone binding `ConcurrencyLimit` inputs are removed. The CLI remains
+pinned to its earlier compatible Kernel revision until generated policy input,
+preparation, error restoration, capability facts, and acceptance are integrated.
+This Kernel implementation alone does not establish generated policy support.
 
 ### Admission accounting
 
-`BindingOptions.ConcurrencyLimit` is mandatory and must be between 1 and
+`BindingOptions.Policy.ConcurrencyLimit` is mandatory and must be between 1 and
 `invocation.MaximumConcurrencyLimit` (65,536), inclusive. `NewBinding` rejects
 zero, negative, or over-bound values instead of silently supplying a default.
 `Binding.ConcurrencyLimit()` exposes the immutable resolved value. Assembly
-must supply it for every binding. This is a breaking assembly-input change;
-older generated bindings must be regenerated with a compatible CLI before
-adopting this Kernel revision. The currently pinned CLI consumer has not yet
-adopted this input.
+must supply it for every binding as part of the complete policy.
 
 Admission is scoped to one exact Interface binding in one dispatcher, not to
 a handle, constructor, or shared catalog. The current primitive has no queue:
@@ -170,9 +225,8 @@ over saturation for otherwise live calls and remains permanent after drain.
 
 `intrinsic.NewBindings` supplies the fixed `intrinsic.ConcurrencyLimit` of 64
 for each intrinsic Interface. Ordinary assembly supplies its own explicit
-limits. No queue, retry, full compiled-policy schema, CLI-advertised absence
-default, or generated policy enforcement is implied by this Kernel primitive.
-Those policy and consumer outcomes remain incomplete.
+limits. The compiled-policy boundary above owns timeout and retry execution;
+queue, circuit, and generated policy acceptance remain incomplete.
 
 ## Implementation lifecycle
 
@@ -298,6 +352,7 @@ go test ./invocation -run '^$' -bench '^BenchmarkInvocationErrorBoundary$' -benc
 go test ./invocation -run '^$' -bench '^BenchmarkCancelledTargetDrain$' -benchmem -count=5
 go test ./invocation -run '^$' -bench '^BenchmarkKernelResponseProcessing$' -benchmem -count=5
 go test ./invocation -run '^$' -bench '^BenchmarkAdmissionConcurrent$' -benchmem -count=5
+go test ./invocation -run '^$' -bench '^BenchmarkCompiledPolicy$' -benchmem -count=5
 ```
 
 Benchmark results depend on the machine and Go toolchain. Record that context

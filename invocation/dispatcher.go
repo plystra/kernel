@@ -4,7 +4,6 @@ import (
 	"errors"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/plystra/kernel/capability"
 )
@@ -23,32 +22,34 @@ var (
 
 // DispatcherOptions configures mandatory runtime dispatch behavior.
 type DispatcherOptions struct {
-	DefaultTimeout time.Duration
+	PolicyVersion int
 }
 
 // Dispatcher owns one atomically published immutable executable catalog. A
 // Dispatcher must not be copied after first use.
 type Dispatcher struct {
-	defaultTimeout time.Duration
-	catalog        atomic.Pointer[catalogState]
-	mu             sync.Mutex
-	attempts       map[*targetAttempt]struct{}
-	inflight       map[capability.Identifier]int
-	draining       bool
-	drained        chan struct{}
+	policyVersion int
+	catalog       atomic.Pointer[catalogState]
+	mu            sync.Mutex
+	attempts      map[*targetAttempt]struct{}
+	inflight      map[capability.Identifier]int
+	draining      bool
+	drained       chan struct{}
+	closing       chan struct{}
 }
 
-// NewDispatcher creates an unpublished Dispatcher with a positive default
-// execution timeout.
+// NewDispatcher creates an unpublished Dispatcher for the exact compiled-policy
+// protocol. Deadlines are resolved per binding, never supplied as a fallback.
 func NewDispatcher(options DispatcherOptions) (*Dispatcher, error) {
-	if options.DefaultTimeout <= 0 {
+	if options.PolicyVersion != PolicySchemaVersion {
 		return nil, ErrInvalidDispatcher
 	}
 	return &Dispatcher{
-		defaultTimeout: options.DefaultTimeout,
-		attempts:       make(map[*targetAttempt]struct{}),
-		inflight:       make(map[capability.Identifier]int),
-		drained:        make(chan struct{}),
+		policyVersion: options.PolicyVersion,
+		attempts:      make(map[*targetAttempt]struct{}),
+		inflight:      make(map[capability.Identifier]int),
+		drained:       make(chan struct{}),
+		closing:       make(chan struct{}),
 	}, nil
 }
 
@@ -81,7 +82,7 @@ func (d *Dispatcher) Published() bool {
 }
 
 func (d *Dispatcher) valid() bool {
-	return d != nil && d.defaultTimeout > 0
+	return d != nil && d.policyVersion == PolicySchemaVersion && d.closing != nil
 }
 
 func (d *Dispatcher) snapshot() (*catalogState, error) {

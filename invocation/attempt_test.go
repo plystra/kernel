@@ -4,16 +4,50 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/plystra/kernel/capability"
 )
 
+type pendingDeadlineContext struct {
+	context.Context
+	deadline time.Time
+}
+
+func (c pendingDeadlineContext) Deadline() (time.Time, bool) { return c.deadline, true }
+
+func TestScheduledAttemptCannotEnterAfterBudgetBeforeTimerCallback(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		dispatcher := newTestDispatcher(t)
+		// Model the interval after a deadline passes but before its timer runs.
+		ctx := pendingDeadlineContext{Context: context.Background(), deadline: time.Now().Add(time.Second)}
+		result := &targetResult[struct{}]{attempt: targetAttempt{cancel: func() {}}, done: make(chan struct{})}
+		if dispatcher.registerAttempt(ctx, &result.attempt, testBinding(t, "example.budget/v1")) != nil {
+			t.Fatal("attempt was not registered")
+		}
+		time.Sleep(time.Second)
+		contract := capability.MustParseContract[struct{}, struct{}]("example.budget/v1")
+		endpoint, err := NewEndpoint(contract, func(context.Context, struct{}) (struct{}, error) {
+			t.Error("expired scheduled attempt entered target")
+			return struct{}{}, nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		executeAttempt(ctx, dispatcher, endpoint, struct{}{}, result, nil)
+		var boundary *Error
+		if !errors.As(result.err, &boundary) || boundary.Code() != ErrorTimeout || boundary.Completion() != CompletionNotStarted || dispatcher.ActiveAttempts() != 0 {
+			t.Fatalf("scheduled expiration = %v", result.err)
+		}
+	})
+}
+
 func TestAbandonedScheduledAttemptCannotEnterTarget(t *testing.T) {
 	dispatcher := newTestDispatcher(t)
 	attempt := &targetAttempt{cancel: func() {}}
 	binding := testBinding(t, "example.attempt/v1")
-	binding.concurrencyLimit = 1
+	binding.policy.ConcurrencyLimit = 1
 	if dispatcher.registerAttempt(context.Background(), attempt, binding) != nil {
 		t.Fatal("attempt was not registered")
 	}

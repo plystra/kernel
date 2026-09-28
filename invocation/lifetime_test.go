@@ -189,7 +189,7 @@ func TestDrainRejectsInvalidContextsWithoutClosingAdmission(t *testing.T) {
 	}
 	drainDispatcher(t, dispatcher)
 
-	unpublished, err := invocation.NewDispatcher(invocation.DispatcherOptions{DefaultTimeout: time.Second})
+	unpublished, err := invocation.NewDispatcher(invocation.DispatcherOptions{PolicyVersion: invocation.PolicySchemaVersion})
 	if err != nil {
 		t.Fatal(err)
 	}

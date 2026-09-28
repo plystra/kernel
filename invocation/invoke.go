@@ -1,6 +1,11 @@
 package invocation
 
-import "context"
+import (
+	"context"
+	"time"
+
+	"github.com/plystra/kernel/capability"
+)
 
 const (
 	detailInvalidHandle             = "runtime.invalid_handle"
@@ -20,15 +25,17 @@ const (
 	detailResponseProcessorRequired = "runtime.response_processor_required"
 	detailResponseProcessingFailed  = "runtime.response_processing_failed"
 	detailConcurrencyExhausted      = "runtime.concurrency_exhausted"
+	detailRequestPreparationFailed  = "runtime.request_preparation_failed"
 )
 
 // Invoke executes one exact canonical capability through raw Kernel dispatch.
-// Every entered invocation is deadline-bound and normalized to safe errors.
+// Every invocation executes the exact binding's compiled policy and normalizes
+// failures to safe errors. A policy without timeout adds no deadline.
 // Cancellation may complete the caller before the target terminates. Generated
 // proxies and adapters own request isolation; raw callers must not share mutable
 // request storage with an executing target, including after caller completion.
 func (h Handle[Request, Response]) Invoke(ctx context.Context, request Request) (Response, error) {
-	return h.invoke(ctx, request, nil)
+	return h.invoke(ctx, request, nil, nil)
 }
 
 // InvokeWithResponse runs a generated response validator and copier inside the
@@ -47,10 +54,24 @@ func (h Handle[Request, Response]) InvokeWithResponse(ctx context.Context, reque
 		var zero Response
 		return zero, newNotStartedBoundary(ErrorInvalidArgument, detailResponseProcessorRequired)
 	}
-	return h.invoke(ctx, request, process)
+	return h.invoke(ctx, request, nil, process)
 }
 
-func (h Handle[Request, Response]) invoke(ctx context.Context, request Request, process func(Response) (Response, error)) (Response, error) {
+// InvokeWithPreparation starts the logical-call budget before a generated
+// request validator/copier creates the immutable snapshot. prepare runs once,
+// synchronously, and must be bounded and side-effect-free. Each endpoint adapter
+// must copy that snapshot again before target entry, including on retries.
+// process has the same tracked ownership contract as InvokeWithResponse.
+func (h Handle[Request, Response]) InvokeWithPreparation(ctx context.Context, request Request, prepare func(Request) (Request, error), process func(Response) (Response, error)) (Response, error) {
+	if prepare == nil || process == nil {
+		var zero Response
+		return zero, newNotStartedBoundary(ErrorInvalidArgument, detailRequestPreparationFailed)
+	}
+	return h.invoke(ctx, request, prepare, process)
+}
+
+func (h Handle[Request, Response]) invoke(ctx context.Context, request Request, prepare func(Request) (Request, error), process func(Response) (Response, error)) (Response, error) {
+	started := time.Now()
 	var zero Response
 	if !h.valid() {
 		return zero, newNotStartedBoundary(ErrorInternal, detailInvalidHandle)
@@ -75,17 +96,48 @@ func (h Handle[Request, Response]) invoke(ctx context.Context, request Request, 
 	if err != nil {
 		return zero, newNotStartedBoundary(ErrorInternal, detailInvocationIDFailed)
 	}
-	callContext, cleanup, err := enterInvocationContext(ctx, invocationID, h.dispatcher.defaultTimeout)
+	callContext, cleanup, err := enterInvocationContext(ctx, invocationID, binding.policy.Timeout, started)
 	if err != nil {
 		return zero, newNotStartedBoundary(ErrorInvalidArgument, detailContextRequired)
 	}
 	defer cleanup()
 
-	response, boundary := invokeBounded(callContext, cleanup, h, binding, request, process)
-	if boundary != nil {
+	if boundary := invocationContextError(callContext); boundary != nil {
 		return zero, boundary
 	}
-	return response, nil
+	if prepare != nil {
+		request, err = prepareRequest(request, prepare)
+		if boundary := invocationContextError(callContext); boundary != nil {
+			return zero, boundary
+		}
+		if err != nil {
+			return zero, err
+		}
+	}
+	return invokePolicy(callContext, cleanup, h, binding, request, process)
+}
+
+func prepareRequest[Request any](request Request, prepare func(Request) (Request, error)) (snapshot Request, err error) {
+	defer func() {
+		if recover() != nil {
+			var zero Request
+			snapshot = zero
+			err = newNotStartedBoundary(ErrorInternal, detailRequestPreparationFailed)
+		}
+	}()
+	snapshot, err = prepare(request)
+	if err != nil {
+		boundary := normalizeEndpointError(capability.Definition{}, err).(*Error)
+		if boundary.code != ErrorInvalidArgument {
+			boundary = newNotStartedBoundary(ErrorInternal, detailRequestPreparationFailed)
+		} else {
+			copy := *boundary
+			boundary = &copy
+			boundary.completion = CompletionNotStarted
+		}
+		return snapshot, boundary
+	}
+	return snapshot, nil
 }
 
 type targetResult[Response any] struct {
@@ -200,7 +252,15 @@ func invocationContextError(ctx context.Context) *Error {
 			return boundary
 		}
 	}
-	return boundaryForContextError(ctx.Err())
+	if boundary := boundaryForContextError(ctx.Err()); boundary != nil {
+		return boundary
+	}
+	// Bounded synchronous preparation can use the entire budget before the
+	// context timer's callback is scheduled. Never admit work in that gap.
+	if deadline, bounded := ctx.Deadline(); bounded && !time.Now().Before(deadline) {
+		return newNotStartedBoundary(ErrorTimeout, detailDeadlineExceeded)
+	}
+	return nil
 }
 
 func boundaryForContextError(err error) *Error {

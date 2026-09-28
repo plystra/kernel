@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/plystra/kernel/capability"
 	"github.com/plystra/kernel/capability/catalog"
@@ -79,7 +78,7 @@ func TestBindingsPublishHealthAndInfoWithoutOrdinaryPlugins(t *testing.T) {
 	if got := catalogSnapshot.Bindings(); len(got) != 2 || got[0].InterfaceID().String() != "kernel.health/v1" {
 		t.Fatalf("catalog changed with source bindings: %#v", got)
 	}
-	dispatcher, err := invocation.NewDispatcher(invocation.DispatcherOptions{DefaultTimeout: time.Second})
+	dispatcher, err := invocation.NewDispatcher(invocation.DispatcherOptions{PolicyVersion: invocation.PolicySchemaVersion})
 	if err != nil {
 		t.Fatalf("NewDispatcher: %v", err)
 	}
@@ -142,7 +141,7 @@ func TestBindingsAreSafeForConcurrentIntrinsicReads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCatalog: %v", err)
 	}
-	dispatcher, err := invocation.NewDispatcher(invocation.DispatcherOptions{DefaultTimeout: time.Second})
+	dispatcher, err := invocation.NewDispatcher(invocation.DispatcherOptions{PolicyVersion: invocation.PolicySchemaVersion})
 	if err != nil {
 		t.Fatalf("NewDispatcher: %v", err)
 	}
@@ -225,7 +224,7 @@ func intrinsicInfoHandle(t testing.TB, bindings []invocation.Binding) (*invocati
 	if err != nil {
 		t.Fatalf("NewCatalog: %v", err)
 	}
-	dispatcher, err := invocation.NewDispatcher(invocation.DispatcherOptions{DefaultTimeout: time.Second})
+	dispatcher, err := invocation.NewDispatcher(invocation.DispatcherOptions{PolicyVersion: invocation.PolicySchemaVersion})
 	if err != nil {
 		t.Fatalf("NewDispatcher: %v", err)
 	}

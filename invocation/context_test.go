@@ -16,7 +16,7 @@ func TestEnterInvocationContextStartsIdentityNeutralRoot(t *testing.T) {
 	invocationID := testInvocationID(t, "11111111111111111111111111111111")
 	const timeout = time.Minute
 	earliest := time.Now().Add(timeout)
-	entered, cleanup, err := enterInvocationContext(parent, invocationID, timeout)
+	entered, cleanup, err := enterInvocationContext(parent, invocationID, timeout, time.Now())
 	latest := time.Now().Add(timeout)
 	if err != nil {
 		t.Fatalf("enterInvocationContext: %v", err)
@@ -55,7 +55,7 @@ func TestEnterInvocationContextPreservesNestedAncestry(t *testing.T) {
 
 	outerID := testInvocationID(t, "22222222222222222222222222222222")
 	innerID := testInvocationID(t, "33333333333333333333333333333333")
-	outer, cleanupOuter, err := enterInvocationContext(context.Background(), outerID, time.Minute)
+	outer, cleanupOuter, err := enterInvocationContext(context.Background(), outerID, time.Minute, time.Now())
 	if err != nil {
 		t.Fatalf("enter outer: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestEnterInvocationContextPreservesNestedAncestry(t *testing.T) {
 		t.Fatal("outer Current missing")
 	}
 
-	inner, cleanupInner, err := enterInvocationContext(outer, innerID, 2*time.Minute)
+	inner, cleanupInner, err := enterInvocationContext(outer, innerID, 2*time.Minute, time.Now())
 	if err != nil {
 		t.Fatalf("enter inner: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestEnterInvocationContextChoosesEarliestDeadline(t *testing.T) {
 	t.Run("configured default", func(t *testing.T) {
 		const timeout = time.Minute
 		earliest := time.Now().Add(timeout)
-		entered, cleanup, err := enterInvocationContext(context.Background(), testInvocationID(t, "44444444444444444444444444444444"), timeout)
+		entered, cleanup, err := enterInvocationContext(context.Background(), testInvocationID(t, "44444444444444444444444444444444"), timeout, time.Now())
 		latest := time.Now().Add(timeout)
 		if err != nil {
 			t.Fatalf("enterInvocationContext: %v", err)
@@ -103,7 +103,7 @@ func TestEnterInvocationContextChoosesEarliestDeadline(t *testing.T) {
 		callerDeadline := time.Now().Add(time.Minute)
 		caller, cancelCaller := context.WithDeadline(context.Background(), callerDeadline)
 		defer cancelCaller()
-		entered, cleanup, err := enterInvocationContext(caller, testInvocationID(t, "55555555555555555555555555555555"), time.Hour)
+		entered, cleanup, err := enterInvocationContext(caller, testInvocationID(t, "55555555555555555555555555555555"), time.Hour, time.Now())
 		if err != nil {
 			t.Fatalf("enterInvocationContext: %v", err)
 		}
@@ -118,7 +118,7 @@ func TestEnterInvocationContextChoosesEarliestDeadline(t *testing.T) {
 		authorityDeadline := time.Now().Add(time.Minute)
 		authority, cancelAuthority := context.WithDeadline(context.Background(), authorityDeadline)
 		defer cancelAuthority()
-		outer, cleanupOuter, err := enterInvocationContext(authority, testInvocationID(t, "66666666666666666666666666666666"), time.Hour)
+		outer, cleanupOuter, err := enterInvocationContext(authority, testInvocationID(t, "66666666666666666666666666666666"), time.Hour, time.Now())
 		if err != nil {
 			t.Fatalf("enter outer: %v", err)
 		}
@@ -127,7 +127,7 @@ func TestEnterInvocationContextChoosesEarliestDeadline(t *testing.T) {
 		if _, exists := detached.Deadline(); exists {
 			t.Fatal("test context retained ordinary deadline")
 		}
-		inner, cleanupInner, err := enterInvocationContext(detached, testInvocationID(t, "77777777777777777777777777777777"), time.Hour)
+		inner, cleanupInner, err := enterInvocationContext(detached, testInvocationID(t, "77777777777777777777777777777777"), time.Hour, time.Now())
 		if err != nil {
 			t.Fatalf("enter inner: %v", err)
 		}
@@ -143,13 +143,13 @@ func TestEnterInvocationContextPreservesNestedCancellationAuthority(t *testing.T
 	t.Parallel()
 
 	authority, cancelAuthority := context.WithCancel(context.Background())
-	outer, cleanupOuter, err := enterInvocationContext(authority, testInvocationID(t, "88888888888888888888888888888888"), time.Minute)
+	outer, cleanupOuter, err := enterInvocationContext(authority, testInvocationID(t, "88888888888888888888888888888888"), time.Minute, time.Now())
 	if err != nil {
 		cancelAuthority()
 		t.Fatalf("enter outer: %v", err)
 	}
 	defer cleanupOuter()
-	inner, cleanupInner, err := enterInvocationContext(context.WithoutCancel(outer), testInvocationID(t, "99999999999999999999999999999999"), time.Minute)
+	inner, cleanupInner, err := enterInvocationContext(context.WithoutCancel(outer), testInvocationID(t, "99999999999999999999999999999999"), time.Minute, time.Now())
 	if err != nil {
 		cancelAuthority()
 		t.Fatalf("enter inner: %v", err)
@@ -200,12 +200,12 @@ func TestEnterInvocationContextRejectsInvalidInputs(t *testing.T) {
 
 	outerID := testInvocationID(t, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	innerID := testInvocationID(t, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
-	outer, cleanupOuter, err := enterInvocationContext(context.Background(), outerID, time.Minute)
+	outer, cleanupOuter, err := enterInvocationContext(context.Background(), outerID, time.Minute, time.Now())
 	if err != nil {
 		t.Fatalf("enter outer: %v", err)
 	}
 	defer cleanupOuter()
-	inner, cleanupInner, err := enterInvocationContext(outer, innerID, time.Minute)
+	inner, cleanupInner, err := enterInvocationContext(outer, innerID, time.Minute, time.Now())
 	if err != nil {
 		t.Fatalf("enter inner: %v", err)
 	}
@@ -223,14 +223,13 @@ func TestEnterInvocationContextRejectsInvalidInputs(t *testing.T) {
 	}{
 		{name: "nil parent", invocation: outerID, timeout: time.Minute},
 		{name: "zero invocation", parent: context.Background(), timeout: time.Minute},
-		{name: "zero timeout", parent: context.Background(), invocation: outerID},
 		{name: "negative timeout", parent: context.Background(), invocation: outerID, timeout: -time.Second},
 		{name: "corrupt frame", parent: corrupt, invocation: innerID, timeout: time.Minute},
 		{name: "forged frame", parent: forged, invocation: innerID, timeout: time.Minute},
 		{name: "duplicate invocation", parent: outer, invocation: outerID, timeout: time.Minute},
 		{name: "duplicate parent invocation", parent: inner, invocation: outerID, timeout: time.Minute},
 	} {
-		created, createdCleanup, err := enterInvocationContext(test.parent, test.invocation, test.timeout)
+		created, createdCleanup, err := enterInvocationContext(test.parent, test.invocation, test.timeout, time.Now())
 		if !errors.Is(err, ErrInvalidInvocationContext) || created != nil || createdCleanup != nil {
 			t.Fatalf("%s enterInvocationContext = %#v, cleanup present %t, %v", test.name, created, createdCleanup != nil, err)
 		}

@@ -91,16 +91,16 @@ func TestHandleInvokeDispatchesIntrinsicImplementation(t *testing.T) {
 		t.Fatalf("NewEndpoint: %v", err)
 	}
 	binding, err := NewBinding(BindingOptions{
-		Kind:             BindingKindIntrinsic,
-		ModuleBuild:      mustModuleBuild(t, "github.com/plystra/kernel", "v0.1.0", ""),
-		SelectionReason:  SelectionReasonIntrinsic,
-		ContractDigest:   sha256.Sum256([]byte("kernel.info/v1 schema")),
-		ConcurrencyLimit: 256,
+		Kind:            BindingKindIntrinsic,
+		ModuleBuild:     mustModuleBuild(t, "github.com/plystra/kernel", "v0.1.0", ""),
+		SelectionReason: SelectionReasonIntrinsic,
+		ContractDigest:  sha256.Sum256([]byte("kernel.info/v1 schema")),
+		Policy:          testPolicy(time.Second, 256),
 	}, endpoint)
 	if err != nil {
 		t.Fatalf("NewBinding: %v", err)
 	}
-	dispatcher := newInvokeDispatcher(t, time.Second)
+	dispatcher := newInvokeDispatcher(t)
 	catalog, err := NewCatalog([]Binding{binding})
 	if err != nil {
 		t.Fatalf("NewCatalog: %v", err)
@@ -120,7 +120,7 @@ func TestHandleInvokePropagatesNestedAncestry(t *testing.T) {
 
 	outerContract := capability.MustParseContract[invokeRequest, invokeResponse]("example.outer/v1")
 	innerContract := capability.MustParseContract[invokeRequest, invokeResponse]("example.inner/v1")
-	dispatcher, err := NewDispatcher(DispatcherOptions{DefaultTimeout: time.Second})
+	dispatcher, err := NewDispatcher(DispatcherOptions{PolicyVersion: PolicySchemaVersion})
 	if err != nil {
 		t.Fatalf("NewDispatcher: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestHandleInvokeTreatsDroppedContextAsIndependentCall(t *testing.T) {
 
 	outerContract := capability.MustParseContract[invokeRequest, invokeResponse]("example.context-outer/v1")
 	innerContract := capability.MustParseContract[invokeRequest, invokeResponse]("example.context-inner/v1")
-	dispatcher := newInvokeDispatcher(t, time.Second)
+	dispatcher := newInvokeDispatcher(t)
 	innerHandle, err := NewHandle(dispatcher, innerContract, true)
 	if err != nil {
 		t.Fatalf("NewHandle(inner): %v", err)
@@ -324,8 +324,8 @@ func TestHandleInvokeNormalizesProviderFailuresAndPanics(t *testing.T) {
 			if response != (invokeResponse{}) || strings.Contains(err.Error(), "secret") {
 				t.Fatalf("provider failure = %#v, %v", response, err)
 			}
-			if test.wantShared != nil && boundary != test.wantShared {
-				t.Fatalf("safe boundary copy = %#v, want original %#v", boundary, test.wantShared)
+			if test.wantShared != nil && (boundary.Code() != test.wantShared.Code() || boundary.DetailCode() != test.wantShared.DetailCode() || boundary.Completion() != test.wantShared.Completion() || boundary.Attempts() != 1 || test.wantShared.Attempts() != 0) {
+				t.Fatalf("safe boundary changed its source or lost attempt evidence: %#v, source %#v", boundary, test.wantShared)
 			}
 		})
 	}
@@ -492,12 +492,12 @@ func TestHandleInvokeRejectsPreEntryFailuresWithoutProviderExecution(t *testing.
 	_, err = unavailable.Invoke(harness.root, invokeRequest{})
 	requireInvocationError(t, err, ErrorUnavailable, detailCapabilityUnavailable)
 
-	unpublished := newInvokeDispatcher(t, time.Second)
+	unpublished := newInvokeDispatcher(t)
 	unpublishedHandle, unpublishedRoot := newInvokeHandleAndContext(t, unpublished, contract)
 	_, err = unpublishedHandle.Invoke(unpublishedRoot, invokeRequest{})
 	requireInvocationError(t, err, ErrorUnavailable, detailDispatcherNotReady)
 
-	empty := newInvokeDispatcher(t, time.Second)
+	empty := newInvokeDispatcher(t)
 	emptyCatalog, err := NewCatalog(nil)
 	if err != nil {
 		t.Fatalf("NewCatalog(nil): %v", err)
@@ -556,7 +556,8 @@ func newInvokeHarness(
 		options.defaultTimeout = time.Second
 	}
 	binding := newInvokeBinding(t, contract, handler)
-	dispatcher := newInvokeDispatcher(t, options.defaultTimeout)
+	binding.policy.Timeout = options.defaultTimeout
+	dispatcher := newInvokeDispatcher(t)
 	catalog, err := NewCatalog([]Binding{binding})
 	if err != nil {
 		t.Fatalf("NewCatalog: %v", err)
@@ -576,9 +577,9 @@ func newInvokeHarness(
 	}
 }
 
-func newInvokeDispatcher(t *testing.T, timeout time.Duration) *Dispatcher {
+func newInvokeDispatcher(t *testing.T) *Dispatcher {
 	t.Helper()
-	dispatcher, err := NewDispatcher(DispatcherOptions{DefaultTimeout: timeout})
+	dispatcher, err := NewDispatcher(DispatcherOptions{PolicyVersion: PolicySchemaVersion})
 	if err != nil {
 		t.Fatalf("NewDispatcher: %v", err)
 	}
@@ -609,12 +610,12 @@ func newInvokeBinding(
 		t.Fatalf("NewEndpoint: %v", err)
 	}
 	binding, err := NewBinding(BindingOptions{
-		Kind:             BindingKindImplementation,
-		Constructor:      "github.com/acme/invoke/implementation.New",
-		ModuleBuild:      mustModuleBuild(t, "github.com/acme/invoke", "v1.0.0", ""),
-		SelectionReason:  SelectionReasonUniqueCompatible,
-		ContractDigest:   sha256.Sum256([]byte(contract.Identifier().String() + " schema")),
-		ConcurrencyLimit: 256,
+		Kind:            BindingKindImplementation,
+		Constructor:     "github.com/acme/invoke/implementation.New",
+		ModuleBuild:     mustModuleBuild(t, "github.com/acme/invoke", "v1.0.0", ""),
+		SelectionReason: SelectionReasonUniqueCompatible,
+		ContractDigest:  sha256.Sum256([]byte(contract.Identifier().String() + " schema")),
+		Policy:          testPolicy(time.Second, 256),
 	}, endpoint)
 	if err != nil {
 		t.Fatalf("NewBinding: %v", err)
@@ -647,12 +648,12 @@ func benchmarkInvokeRuntime(b *testing.B) (Handle[invokeRequest, invokeResponse]
 		b.Fatalf("NewEndpoint: %v", err)
 	}
 	binding, err := NewBinding(BindingOptions{
-		Kind:             BindingKindImplementation,
-		Constructor:      "github.com/acme/benchmark/implementation.New",
-		ModuleBuild:      mustModuleBuildBenchmark(b, "github.com/acme/benchmark", "v1.0.0", ""),
-		SelectionReason:  SelectionReasonUniqueCompatible,
-		ContractDigest:   sha256.Sum256([]byte("example.benchmark-invoke/v1 schema")),
-		ConcurrencyLimit: 256,
+		Kind:            BindingKindImplementation,
+		Constructor:     "github.com/acme/benchmark/implementation.New",
+		ModuleBuild:     mustModuleBuildBenchmark(b, "github.com/acme/benchmark", "v1.0.0", ""),
+		SelectionReason: SelectionReasonUniqueCompatible,
+		ContractDigest:  sha256.Sum256([]byte("example.benchmark-invoke/v1 schema")),
+		Policy:          testPolicy(time.Second, 256),
 	}, endpoint)
 	if err != nil {
 		b.Fatalf("NewBinding: %v", err)
@@ -661,7 +662,7 @@ func benchmarkInvokeRuntime(b *testing.B) (Handle[invokeRequest, invokeResponse]
 	if err != nil {
 		b.Fatalf("NewCatalog: %v", err)
 	}
-	dispatcher, err := NewDispatcher(DispatcherOptions{DefaultTimeout: time.Second})
+	dispatcher, err := NewDispatcher(DispatcherOptions{PolicyVersion: PolicySchemaVersion})
 	if err != nil {
 		b.Fatalf("NewDispatcher: %v", err)
 	}

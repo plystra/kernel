@@ -5,22 +5,21 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/plystra/kernel/capability"
 )
 
-func TestNewDispatcherRequiresRuntimeConfiguration(t *testing.T) {
+func TestNewDispatcherRequiresSupportedPolicyVersion(t *testing.T) {
 	t.Parallel()
 
-	for _, timeout := range []time.Duration{0, -time.Nanosecond, -time.Second} {
-		dispatcher, err := NewDispatcher(DispatcherOptions{DefaultTimeout: timeout})
+	for _, version := range []int{0, -1, 2} {
+		dispatcher, err := NewDispatcher(DispatcherOptions{PolicyVersion: version})
 		if !errors.Is(err, ErrInvalidDispatcher) || dispatcher != nil {
-			t.Fatalf("NewDispatcher(%s) = %#v, %v", timeout, dispatcher, err)
+			t.Fatalf("NewDispatcher(%d) = %#v, %v", version, dispatcher, err)
 		}
 	}
-	dispatcher, err := NewDispatcher(DispatcherOptions{DefaultTimeout: 30 * time.Second})
-	if err != nil || !dispatcher.valid() || dispatcher.defaultTimeout != 30*time.Second || dispatcher.Published() {
+	dispatcher, err := NewDispatcher(DispatcherOptions{PolicyVersion: PolicySchemaVersion})
+	if err != nil || !dispatcher.valid() || dispatcher.Published() {
 		t.Fatalf("NewDispatcher(valid) = %#v, %v", dispatcher, err)
 	}
 }
@@ -195,7 +194,7 @@ func TestDispatcherSnapshotsAreSafeDuringPublicationAndAllocateNothing(t *testin
 func newTestDispatcher(t *testing.T) *Dispatcher {
 	t.Helper()
 	dispatcher, err := NewDispatcher(DispatcherOptions{
-		DefaultTimeout: time.Second,
+		PolicyVersion: PolicySchemaVersion,
 	})
 	if err != nil {
 		t.Fatalf("NewDispatcher: %v", err)

@@ -23,6 +23,8 @@ type runtimeFrame struct {
 	parentID     InvocationID
 	deadline     time.Time
 	authority    context.Context
+	retryOwner   InvocationID
+	attempt      int
 }
 
 // InvocationContext is the read-only identity-neutral runtime frame visible to
@@ -33,6 +35,8 @@ type InvocationContext struct {
 	invocationID InvocationID
 	parentID     InvocationID
 	deadline     time.Time
+	retryOwner   InvocationID
+	attempt      int
 }
 
 // RequestIDFromContext returns the runtime-owned root request identity when ctx
@@ -67,6 +71,8 @@ func Current(ctx context.Context) (InvocationContext, bool) {
 		invocationID: frame.invocationID,
 		parentID:     frame.parentID,
 		deadline:     frame.deadline,
+		retryOwner:   frame.retryOwner,
+		attempt:      frame.attempt,
 	}, true
 }
 
@@ -83,11 +89,17 @@ func (c InvocationContext) InvocationID() InvocationID { return c.invocationID }
 // first provider call in a request.
 func (c InvocationContext) ParentInvocationID() InvocationID { return c.parentID }
 
-// Deadline returns the effective invocation deadline.
+// Deadline returns the effective invocation deadline, or zero when unbounded.
 func (c InvocationContext) Deadline() time.Time { return c.deadline }
 
-func enterInvocationContext(parent context.Context, invocationID InvocationID, defaultTimeout time.Duration) (context.Context, func(), error) {
-	if parent == nil || !invocationID.Valid() || defaultTimeout <= 0 {
+// RetryOwner identifies the single framework retry owner in this call chain.
+func (c InvocationContext) RetryOwner() InvocationID { return c.retryOwner }
+
+// Attempt returns the one-based bounded logical-call attempt number.
+func (c InvocationContext) Attempt() int { return c.attempt }
+
+func enterInvocationContext(parent context.Context, invocationID InvocationID, timeout time.Duration, started time.Time) (context.Context, func(), error) {
+	if parent == nil || !invocationID.Valid() || timeout < 0 {
 		return nil, nil, ErrInvalidInvocationContext
 	}
 
@@ -97,6 +109,7 @@ func enterInvocationContext(parent context.Context, invocationID InvocationID, d
 		parentID          InvocationID
 		inheritedDeadline time.Time
 		authority         context.Context
+		retryOwner        InvocationID
 	)
 	stored := parent.Value(runtimeFrameKey{})
 	if stored != nil {
@@ -109,6 +122,7 @@ func enterInvocationContext(parent context.Context, invocationID InvocationID, d
 		parentID = frame.invocationID
 		inheritedDeadline = frame.deadline
 		authority = frame.authority
+		retryOwner = frame.retryOwner
 	} else {
 		var err error
 		requestID, err = NewRequestID()
@@ -127,11 +141,14 @@ func enterInvocationContext(parent context.Context, invocationID InvocationID, d
 		authority = parent
 	}
 
-	deadline := time.Now().Add(defaultTimeout)
-	if callerDeadline, hasDeadline := parent.Deadline(); hasDeadline && callerDeadline.Before(deadline) {
+	var deadline time.Time
+	if timeout > 0 {
+		deadline = started.Add(timeout)
+	}
+	if callerDeadline, hasDeadline := parent.Deadline(); hasDeadline && (deadline.IsZero() || callerDeadline.Before(deadline)) {
 		deadline = callerDeadline
 	}
-	if !inheritedDeadline.IsZero() && inheritedDeadline.Before(deadline) {
+	if !inheritedDeadline.IsZero() && (deadline.IsZero() || inheritedDeadline.Before(deadline)) {
 		deadline = inheritedDeadline
 	}
 	next := runtimeFrame{
@@ -141,12 +158,20 @@ func enterInvocationContext(parent context.Context, invocationID InvocationID, d
 		parentID:     parentID,
 		deadline:     deadline,
 		authority:    authority,
+		retryOwner:   retryOwner,
+		attempt:      1,
 	}
 	if !next.valid() {
 		return nil, nil, ErrInvalidInvocationContext
 	}
 
-	callContext, cancel := context.WithDeadline(parent, deadline)
+	var callContext context.Context
+	var cancel context.CancelFunc
+	if deadline.IsZero() {
+		callContext, cancel = context.WithCancel(parent)
+	} else {
+		callContext, cancel = context.WithDeadline(parent, deadline)
+	}
 	stopAuthority := context.AfterFunc(authority, cancel)
 	if authority.Err() != nil {
 		cancel()
@@ -172,10 +197,10 @@ func runtimeFrameFrom(ctx context.Context) (runtimeFrame, bool) {
 
 func (f runtimeFrame) valid() bool {
 	if !f.requestID.Valid() || !f.traceID.Valid() || !f.invocationID.Valid() ||
-		(f.parentID.Valid() && f.parentID == f.invocationID) || f.deadline.IsZero() || f.authority == nil {
+		(f.parentID.Valid() && f.parentID == f.invocationID) || f.authority == nil || f.attempt < 1 || f.attempt > MaximumRetryAttempts {
 		return false
 	}
-	if authorityDeadline, hasDeadline := f.authority.Deadline(); hasDeadline && f.deadline.After(authorityDeadline) {
+	if authorityDeadline, hasDeadline := f.authority.Deadline(); hasDeadline && (f.deadline.IsZero() || f.deadline.After(authorityDeadline)) {
 		return false
 	}
 	return true

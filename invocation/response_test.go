@@ -268,7 +268,8 @@ func TestResponseProcessorPreservesSafeValidationBoundary(t *testing.T) {
 	response, err := handle.InvokeWithResponse(context.Background(), nil, func(string) (string, error) {
 		return "private partial response", fmt.Errorf("private validation detail: %w", boundary)
 	})
-	if response != "" || err != boundary || invocation.CompletionOf(err) != invocation.CompletionResultKnown {
+	var failure *invocation.Error
+	if response != "" || !errors.As(err, &failure) || failure.Code() != boundary.Code() || failure.DetailCode() != boundary.DetailCode() || failure.Attempts() != 1 || boundary.Attempts() != 0 || invocation.CompletionOf(err) != invocation.CompletionResultKnown {
 		t.Fatalf("validation result = %q, %v", response, err)
 	}
 }

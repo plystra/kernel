@@ -82,37 +82,38 @@ type BindingOptions struct {
 	ModuleBuild     ModuleBuild
 	SelectionReason SelectionReason
 	ContractDigest  [sha256.Size]byte
-	// ConcurrencyLimit is the explicit positive bound on admitted attempts for
-	// this exact binding. Zero is invalid; assembly must resolve defaults.
-	ConcurrencyLimit int
+	Policy          Policy
 }
 
 // Binding joins one selected Implementation constructor, its module
 // provenance, and contract digest to its executable endpoint. Intrinsic
 // bindings deliberately have no constructor symbol.
 type Binding struct {
-	kind             BindingKind
-	constructor      string
-	moduleBuild      ModuleBuild
-	selectionReason  SelectionReason
-	contractDigest   [sha256.Size]byte
-	concurrencyLimit int
-	endpoint         Endpoint
+	kind            BindingKind
+	constructor     string
+	moduleBuild     ModuleBuild
+	selectionReason SelectionReason
+	contractDigest  [sha256.Size]byte
+	policy          Policy
+	endpoint        Endpoint
 }
 
 // NewBinding validates one already-resolved executable endpoint. An ordinary
 // binding requires the exact selected constructor symbol; an intrinsic binding
 // must not have one. Every binding requires immutable module build provenance
-// for diagnostics and an explicit positive concurrency limit for admission.
+// for diagnostics and a complete supported policy, including explicit defaults.
 func NewBinding(options BindingOptions, endpoint Endpoint) (Binding, error) {
 	binding := Binding{
-		kind:             options.Kind,
-		constructor:      options.Constructor,
-		moduleBuild:      options.ModuleBuild,
-		selectionReason:  options.SelectionReason,
-		contractDigest:   options.ContractDigest,
-		concurrencyLimit: options.ConcurrencyLimit,
-		endpoint:         endpoint,
+		kind:            options.Kind,
+		constructor:     options.Constructor,
+		moduleBuild:     options.ModuleBuild,
+		selectionReason: options.SelectionReason,
+		contractDigest:  options.ContractDigest,
+		policy:          options.Policy,
+		endpoint:        endpoint,
+	}
+	if !binding.policy.valid() {
+		return Binding{}, errors.Join(ErrInvalidBinding, ErrInvalidPolicy)
 	}
 	if !binding.valid() {
 		return Binding{}, ErrInvalidBinding
@@ -188,11 +189,19 @@ func (b Binding) ConcurrencyLimit() int {
 	if !b.valid() {
 		return 0
 	}
-	return b.concurrencyLimit
+	return b.policy.ConcurrencyLimit
+}
+
+// Policy returns a copy of the exact compiled policy, or zero for an invalid binding.
+func (b Binding) Policy() Policy {
+	if !b.valid() {
+		return Policy{}
+	}
+	return b.policy
 }
 
 func (b Binding) valid() bool {
-	if b.concurrencyLimit < 1 || b.concurrencyLimit > MaximumConcurrencyLimit {
+	if !b.policy.valid() {
 		return false
 	}
 	if !b.endpoint.valid() || !b.moduleBuild.Valid() || !b.selectionReason.Valid() || b.contractDigest == [sha256.Size]byte{} {
