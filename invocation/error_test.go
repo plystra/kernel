@@ -20,7 +20,6 @@ func TestNewErrorSupportsEveryStandardClass(t *testing.T) {
 		ErrorUnavailable,
 		ErrorTimeout,
 		ErrorCancelled,
-		ErrorResultUnknown,
 		ErrorInternal,
 		ErrorVersionIncompatible,
 	} {
@@ -46,7 +45,6 @@ func TestNewErrorAllowsEmptyDetailExceptForDenial(t *testing.T) {
 		ErrorUnavailable,
 		ErrorTimeout,
 		ErrorCancelled,
-		ErrorResultUnknown,
 		ErrorInternal,
 		ErrorVersionIncompatible,
 	} {

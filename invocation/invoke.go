@@ -1,9 +1,6 @@
 package invocation
 
-import (
-	"context"
-	"errors"
-)
+import "context"
 
 const (
 	detailInvalidHandle         = "runtime.invalid_handle"
@@ -25,31 +22,31 @@ const (
 func (h Handle[Request, Response]) Invoke(ctx context.Context, request Request) (Response, error) {
 	var zero Response
 	if !h.valid() {
-		return zero, newInvocationBoundary(ErrorInternal, detailInvalidHandle)
+		return zero, newNotStartedBoundary(ErrorInternal, detailInvalidHandle)
 	}
 	if ctx == nil {
-		return zero, newInvocationBoundary(ErrorInvalidArgument, detailContextRequired)
+		return zero, newNotStartedBoundary(ErrorInvalidArgument, detailContextRequired)
 	}
 	if !h.available {
-		return zero, newInvocationBoundary(ErrorUnavailable, detailCapabilityUnavailable)
+		return zero, newNotStartedBoundary(ErrorUnavailable, detailCapabilityUnavailable)
 	}
 
 	state, err := h.dispatcher.snapshot()
 	if err != nil {
-		return zero, newInvocationBoundary(ErrorUnavailable, detailDispatcherNotReady)
+		return zero, newNotStartedBoundary(ErrorUnavailable, detailDispatcherNotReady)
 	}
 	binding, exists := state.entries[h.definition.Identifier()]
 	if !exists {
-		return zero, newInvocationBoundary(ErrorUnavailable, detailCapabilityUnavailable)
+		return zero, newNotStartedBoundary(ErrorUnavailable, detailCapabilityUnavailable)
 	}
 
 	invocationID, err := NewInvocationID()
 	if err != nil {
-		return zero, newInvocationBoundary(ErrorInternal, detailInvocationIDFailed)
+		return zero, newNotStartedBoundary(ErrorInternal, detailInvocationIDFailed)
 	}
 	callContext, cleanup, err := enterInvocationContext(ctx, invocationID, h.dispatcher.defaultTimeout)
 	if err != nil {
-		return zero, newInvocationBoundary(ErrorInvalidArgument, detailContextRequired)
+		return zero, newNotStartedBoundary(ErrorInvalidArgument, detailContextRequired)
 	}
 	defer cleanup()
 
@@ -71,11 +68,12 @@ func invokeBounded[Request, Response any](
 		return zero, boundary
 	}
 	if binding.endpoint.definition != handle.definition {
-		return zero, newInvocationBoundary(ErrorInternal, detailContractMismatch)
+		return zero, newNotStartedBoundary(ErrorInternal, detailContractMismatch)
 	}
 
 	response, err := invokeEndpoint[Request, Response](ctx, binding.endpoint, handle.definition, request)
 	if boundary := invocationContextError(ctx); boundary != nil {
+		boundary.completion = CompletionResultUnknown
 		return zero, boundary
 	}
 	if err != nil {
@@ -86,7 +84,7 @@ func invokeBounded[Request, Response any](
 
 func invocationContextError(ctx context.Context) *Error {
 	if ctx == nil {
-		return newInvocationBoundary(ErrorInvalidArgument, detailContextRequired)
+		return newNotStartedBoundary(ErrorInvalidArgument, detailContextRequired)
 	}
 	if frame, exists := runtimeFrameFrom(ctx); exists {
 		if boundary := boundaryForContextError(frame.authority.Err()); boundary != nil {
@@ -99,40 +97,11 @@ func invocationContextError(ctx context.Context) *Error {
 func boundaryForContextError(err error) *Error {
 	switch err {
 	case context.DeadlineExceeded:
-		return newInvocationBoundary(ErrorTimeout, detailDeadlineExceeded)
+		return newNotStartedBoundary(ErrorTimeout, detailDeadlineExceeded)
 	case context.Canceled:
-		return newInvocationBoundary(ErrorCancelled, detailInvocationCancelled)
+		return newNotStartedBoundary(ErrorCancelled, detailInvocationCancelled)
 	default:
 		return nil
-	}
-}
-
-func normalizeProviderError(providerError error) (boundary error) {
-	boundary = newInvocationBoundary(ErrorInternal, detailProviderFailed)
-	defer func() {
-		if recover() != nil {
-			boundary = newInvocationBoundary(ErrorInternal, detailProviderFailed)
-		}
-	}()
-	if semantic, ok := errors.AsType[*SemanticError](providerError); ok && semantic.valid() {
-		return semantic
-	}
-	if safe, ok := errors.AsType[*Error](providerError); ok && safe.valid() {
-		return safe
-	}
-	switch {
-	case errors.Is(providerError, context.DeadlineExceeded):
-		return newInvocationBoundary(ErrorTimeout, detailDeadlineExceeded)
-	case errors.Is(providerError, context.Canceled):
-		return newInvocationBoundary(ErrorCancelled, detailInvocationCancelled)
-	case errors.Is(providerError, ErrProviderPanic):
-		return newInvocationBoundary(ErrorInternal, detailProviderPanic)
-	case errors.Is(providerError, ErrContractMismatch):
-		return newInvocationBoundary(ErrorInternal, detailContractMismatch)
-	case errors.Is(providerError, ErrInvalidEndpoint):
-		return newInvocationBoundary(ErrorInternal, detailInvalidEndpoint)
-	default:
-		return boundary
 	}
 }
 
@@ -141,5 +110,11 @@ func newInvocationBoundary(code ErrorCode, detailCode string) *Error {
 	if err == nil {
 		return boundary
 	}
-	return &Error{code: ErrorInternal, detailCode: detailErrorNormalization}
+	return &Error{code: ErrorInternal, detailCode: detailErrorNormalization, completion: CompletionResultKnown}
+}
+
+func newNotStartedBoundary(code ErrorCode, detailCode string) *Error {
+	boundary := newInvocationBoundary(code, detailCode)
+	boundary.completion = CompletionNotStarted
+	return boundary
 }

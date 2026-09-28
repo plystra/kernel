@@ -51,7 +51,47 @@ The Kernel receives one complete immutable registry. It distinguishes exact Capa
 
 Go plugins share one process and are not sandboxed. Generated Capability clients are the supported application API; raw dispatch remains a low-level Kernel boundary rather than an encouraged bypass for ordinary plugin code.
 
-Typed contracts declare their exact semantic error codes. Generated semantic error types satisfy `capability.SemanticError` by reporting their code through `SemanticErrorCode() string`; at the provider endpoint, the Kernel preserves only a reported code declared by that same contract and converts it into an immutable provider-neutral `invocation.SemanticError`. Undeclared, malformed, or panicking semantic claims are normalized to `internal`; provider messages and causes never cross the boundary. Standard classified `invocation.Error` values and cancellation or deadline identities retain their existing safe behavior.
+Typed contracts declare their exact semantic error codes. Implementations return
+`invocation.NewSemanticError(code, cause)`, directly or through ordinary `%w`
+wrapping. `Code()` exposes the code and `Unwrap()` retains the optional cause
+for local `errors.Is` and `errors.As` traversal. Formatting and structured
+logging never expose the cause. The superseded structural
+`capability.SemanticError` interface is not accepted.
+
+The endpoint examines both single and joined unwrap edges, with at most 64
+unwrap levels and 1,024 visited nodes. Shared subtrees are permitted within the
+node budget; cycles, panicking unwrap methods, exceeded bounds, invalid or
+undeclared codes, distinct semantic codes, and conflicting primary runtime
+categories fail closed as `internal`. Custom `As` and `Is` methods are not
+executed. Ordinary wrapping and joined errors remain recognizable. The returned
+semantic carrier contains only the declared code and completion classification;
+private causes, wrapper messages, and concrete implementation types are removed.
+
+### Completion classification
+
+`invocation.CompletionOf(err)` reads the separate closed completion vocabulary:
+`not_started`, `result_known`, or `result_unknown`. A nil error is a known
+success. `Error.Completion()` and `SemanticError.Completion()` expose the same
+classification on safe runtime and semantic outcomes. Pre-dispatch rejection
+is `not_started`; an executed target cannot inherit that assertion from a
+nested call. A target's ordinary returned safe error is `result_known`.
+Cancellation that suppresses a dispatched target's result is `result_unknown`,
+not a claim that business effects were rolled back.
+
+Use `invocation.NewResultUnknown(cause)` for an uncertain result, including
+commit-acknowledgement loss. It retains an optional private cause locally and
+can wrap, or be wrapped by, a semantic error. Uncertainty survives ordinary
+wrapping, joins, semantic translation, and endpoint redaction without replacing
+the primary runtime category or declared semantic code. The old
+`ErrorResultUnknown` primary category is removed. A deadline can therefore
+remain a deadline while also reporting `result_unknown`. Incomplete error-tree
+traversal conservatively returns internal failure with `result_unknown`; the
+public completion helper also treats unclassified or invalid errors as unknown.
+
+This Kernel API does not establish generated transport or SDK completion
+projection. Caller completion independent of an uncooperative target, actual
+attempt tracking, admission-permit retention, and shutdown drain remain separate
+runtime work; dispatch is currently synchronous.
 
 ## Implementation lifecycle
 
@@ -166,13 +206,14 @@ foreach ($fuzz in $fuzzTargets) {
 The 10-second duration is a reproducible bounded local validation choice, not
 a universal sufficiency threshold. Increase `-fuzztime` for longer campaigns.
 
-Run the three committed intrinsic Kernel benchmarks separately so their
+Run the committed intrinsic Kernel and error-boundary benchmarks separately so their
 allocation and timing results remain attributable:
 
 ```powershell
 go test ./invocation -run '^$' -bench '^BenchmarkCapabilityLookup$' -benchmem -count=5
 go test ./invocation -run '^$' -bench '^BenchmarkRegistryConcurrentRead$' -benchmem -count=5
 go test ./invocation -run '^$' -bench '^BenchmarkKernelCanonicalDispatch$' -benchmem -count=5
+go test ./invocation -run '^$' -bench '^BenchmarkInvocationErrorBoundary$' -benchmem -count=5
 ```
 
 Benchmark results depend on the machine and Go toolchain. Record that context

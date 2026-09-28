@@ -268,7 +268,7 @@ func TestHandleInvokeNormalizesProviderFailuresAndPanics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewError: %v", err)
 	}
-	unknown, err := NewError(ErrorResultUnknown, "transport.delivery_unknown")
+	unknownCause, err := NewError(ErrorUnavailable, "transport.delivery_unknown")
 	if err != nil {
 		t.Fatalf("NewError(result unknown): %v", err)
 	}
@@ -286,8 +286,8 @@ func TestHandleInvokeNormalizesProviderFailuresAndPanics(t *testing.T) {
 			return invokeResponse{}, fmt.Errorf("provider password=secret: %w", safe)
 		}, code: ErrorInvalidArgument, detail: "contract.invalid_request", wantShared: safe},
 		{name: "result unknown", handler: func(context.Context, invokeRequest) (invokeResponse, error) {
-			return invokeResponse{}, unknown
-		}, code: ErrorResultUnknown, detail: "transport.delivery_unknown", wantShared: unknown},
+			return invokeResponse{}, NewResultUnknown(unknownCause)
+		}, code: ErrorUnavailable, detail: "transport.delivery_unknown"},
 		{name: "raw sensitive error", handler: func(context.Context, invokeRequest) (invokeResponse, error) {
 			return invokeResponse{}, errors.New("provider password=secret")
 		}, code: ErrorInternal, detail: detailProviderFailed},
@@ -346,7 +346,7 @@ func TestHandleInvokePreservesDeclaredSemanticError(t *testing.T) {
 	}, invokeHarnessOptions{})
 
 	response, err := harness.handle.Invoke(harness.root, invokeRequest{})
-	if semantic, ok := errors.AsType[*SemanticError](err); !ok || !semantic.valid() || semantic.SemanticErrorCode() != "invalid_recipient" {
+	if semantic, ok := errors.AsType[*SemanticError](err); !ok || !semantic.valid() || semantic.Code() != "invalid_recipient" {
 		t.Fatalf("semantic error = %#v / %v", semantic, err)
 	}
 	if response != (invokeResponse{}) || strings.Contains(err.Error(), "password") || strings.Contains(err.Error(), "secret") {
@@ -459,7 +459,10 @@ func TestHandleInvokeRejectsContractMismatchWithoutCallingProvider(t *testing.T)
 		t.Fatalf("NewHandle: %v", err)
 	}
 	response, err := handle.Invoke(harness.root, invokeRequest{})
-	requireInvocationError(t, err, ErrorInternal, detailContractMismatch)
+	boundary := requireInvocationError(t, err, ErrorInternal, detailContractMismatch)
+	if boundary.Completion() != CompletionNotStarted {
+		t.Fatalf("contract mismatch completion = %s", boundary.Completion())
+	}
 	if response != (invokeResponse{}) || providerCalls.Load() != 0 {
 		t.Fatalf("contract mismatch = %#v, %v, provider calls %d", response, err, providerCalls.Load())
 	}

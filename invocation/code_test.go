@@ -21,7 +21,6 @@ func TestErrorCodesHaveStableUniqueValues(t *testing.T) {
 		{invocation.ErrorUnavailable, "unavailable"},
 		{invocation.ErrorTimeout, "timeout"},
 		{invocation.ErrorCancelled, "cancelled"},
-		{invocation.ErrorResultUnknown, "result_unknown"},
 		{invocation.ErrorInternal, "internal"},
 		{invocation.ErrorVersionIncompatible, "version_incompatible"},
 	}
@@ -40,7 +39,7 @@ func TestErrorCodesHaveStableUniqueValues(t *testing.T) {
 func TestUnknownErrorCodesAreInvalid(t *testing.T) {
 	t.Parallel()
 
-	for _, code := range []invocation.ErrorCode{"", "unknown", "INTERNAL", "not-found"} {
+	for _, code := range []invocation.ErrorCode{"", "unknown", "INTERNAL", "not-found", "result_unknown"} {
 		if code.Valid() {
 			t.Fatalf("ErrorCode %q is valid", code)
 		}

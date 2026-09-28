@@ -68,7 +68,7 @@ func TestEndpointPreservesTypedNilValues(t *testing.T) {
 	}
 }
 
-func TestEndpointReturnsProviderErrorAndZeroResponse(t *testing.T) {
+func TestEndpointRedactsProviderErrorAndReturnsZeroResponse(t *testing.T) {
 	t.Parallel()
 
 	providerError := errors.New("provider error")
@@ -80,8 +80,9 @@ func TestEndpointReturnsProviderErrorAndZeroResponse(t *testing.T) {
 		t.Fatalf("NewEndpoint: %v", err)
 	}
 	response, err := invokeEndpoint[endpointRequest, endpointResponse](context.Background(), endpoint, contract.Definition(), endpointRequest{})
-	if !errors.Is(err, providerError) {
-		t.Fatalf("invokeEndpoint error = %v, want provider error", err)
+	boundary, ok := errors.AsType[*Error](err)
+	if !ok || boundary.Code() != ErrorInternal || errors.Is(err, providerError) {
+		t.Fatalf("invokeEndpoint error = %v, want redacted internal error", err)
 	}
 	if response != (endpointResponse{}) {
 		t.Fatalf("response = %#v, want zero", response)
@@ -112,7 +113,7 @@ func TestEndpointPreservesOnlyDeclaredSemanticErrors(t *testing.T) {
 				t.Fatalf("NewEndpoint: %v", err)
 			}
 			response, err := invokeEndpoint[endpointRequest, endpointResponse](context.Background(), endpoint, contract.Definition(), endpointRequest{})
-			if semantic, ok := errors.AsType[*SemanticError](err); !ok || !semantic.valid() || semantic.SemanticErrorCode() != "invalid_recipient" {
+			if semantic, ok := errors.AsType[*SemanticError](err); !ok || !semantic.valid() || semantic.Code() != "invalid_recipient" {
 				t.Fatalf("semantic error = %#v / %v", semantic, err)
 			}
 			if response != (endpointResponse{}) || strings.Contains(err.Error(), "secret") {
@@ -148,10 +149,29 @@ func TestEndpointRejectsUnsafeSemanticErrors(t *testing.T) {
 				t.Fatalf("NewEndpoint: %v", err)
 			}
 			response, err := invokeEndpoint[endpointRequest, endpointResponse](context.Background(), endpoint, contract.Definition(), endpointRequest{})
-			if !errors.Is(err, errInvalidProviderSemanticError) || response != (endpointResponse{}) || strings.Contains(err.Error(), "secret") {
+			boundary, ok := errors.AsType[*Error](err)
+			if !ok || boundary.Code() != ErrorInternal || response != (endpointResponse{}) || strings.Contains(err.Error(), "secret") {
 				t.Fatalf("unsafe semantic failure = %#v, %v", response, err)
 			}
 		})
+	}
+}
+
+func TestEndpointRejectsConflictingSemanticErrors(t *testing.T) {
+	t.Parallel()
+	contract := capability.MustParseContractWithSemanticErrors[endpointRequest, endpointResponse](
+		"example.semantic/v1", "invalid_recipient", "temporarily_unavailable",
+	)
+	endpoint, err := NewEndpoint(contract, func(context.Context, endpointRequest) (endpointResponse, error) {
+		return endpointResponse{}, errors.Join(endpointSemanticError("invalid_recipient"), endpointSemanticError("temporarily_unavailable"))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = invokeEndpoint[endpointRequest, endpointResponse](context.Background(), endpoint, contract.Definition(), endpointRequest{})
+	var semantic *SemanticError
+	if errors.As(err, &semantic) {
+		t.Fatalf("conflicting codes became a semantic outcome: %v", err)
 	}
 }
 
@@ -288,11 +308,7 @@ func TestInvokeEndpointRejectsWrongErasedResponseType(t *testing.T) {
 	}
 }
 
-type endpointSemanticError string
-
-func (e endpointSemanticError) Error() string { return "provider secret: " + string(e) }
-
-func (e endpointSemanticError) SemanticErrorCode() string { return string(e) }
+func endpointSemanticError(code string) *SemanticError { return NewSemanticError(code, nil) }
 
 type endpointPanickingSemanticError struct{}
 
@@ -325,12 +341,12 @@ func FuzzEndpointSemanticErrorBoundary(f *testing.F) {
 			t.Fatalf("response = %#v, want zero", response)
 		}
 		if code == "invalid_recipient" {
-			if semantic, ok := errors.AsType[*SemanticError](err); !ok || semantic.SemanticErrorCode() != code {
+			if semantic, ok := errors.AsType[*SemanticError](err); !ok || semantic.Code() != code {
 				t.Fatalf("declared semantic error = %#v / %v", semantic, err)
 			}
 			return
 		}
-		if !errors.Is(err, errInvalidProviderSemanticError) {
+		if boundary, ok := errors.AsType[*Error](err); !ok || boundary.Code() != ErrorInternal {
 			t.Fatalf("unsafe semantic code %q returned %v", code, err)
 		}
 	})

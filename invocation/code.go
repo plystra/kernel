@@ -18,7 +18,6 @@ const (
 	ErrorUnavailable         ErrorCode = "unavailable"
 	ErrorTimeout             ErrorCode = "timeout"
 	ErrorCancelled           ErrorCode = "cancelled"
-	ErrorResultUnknown       ErrorCode = "result_unknown"
 	ErrorInternal            ErrorCode = "internal"
 	ErrorVersionIncompatible ErrorCode = "version_incompatible"
 )
@@ -39,7 +38,6 @@ func (c ErrorCode) Valid() bool {
 		ErrorUnavailable,
 		ErrorTimeout,
 		ErrorCancelled,
-		ErrorResultUnknown,
 		ErrorInternal,
 		ErrorVersionIncompatible:
 		return true

@@ -18,7 +18,7 @@ func TestSemanticErrorExposesOnlyImmutableSafeState(t *testing.T) {
 		}
 	}
 	zero := &invocation.SemanticError{}
-	if zero.SemanticErrorCode() != "" || zero.Error() == "" || strings.Contains(zero.Error(), "provider") {
-		t.Fatalf("zero SemanticError is unsafe: %q / %q", zero.SemanticErrorCode(), zero.Error())
+	if zero.Code() != "" || zero.Error() == "" || strings.Contains(zero.Error(), "provider") {
+		t.Fatalf("zero SemanticError is unsafe: %q / %q", zero.Code(), zero.Error())
 	}
 }
