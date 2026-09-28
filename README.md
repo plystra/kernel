@@ -78,6 +78,14 @@ nested call. A target's ordinary returned safe error is `result_known`.
 Cancellation that suppresses a dispatched target's result is `result_unknown`,
 not a claim that business effects were rolled back.
 
+Generated request validators and admission checks can construct a pre-entry
+failure with `invocation.NewNotStartedError(code, detailCode)`. It validates the
+same closed codes and bounded detail as `NewError`, but its completion is
+`not_started`. Ordinary wrapping preserves that classification locally. If an
+entered target returns such a nested rejection, the outer endpoint promotes it
+to `result_known` without mutating the nested error; any accompanying
+`result_unknown` still wins. Generated consumer adoption remains separate.
+
 Use `invocation.NewResultUnknown(cause)` for an uncertain result, including
 commit-acknowledgement loss. It retains an optional private cause locally and
 can wrap, or be wrapped by, a semantic error. Uncertainty survives ordinary

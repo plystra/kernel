@@ -21,7 +21,8 @@ type Error struct {
 // NewError creates one safe classified capability failure. Denials require a
 // stable detail code so callers can distinguish policy reasons safely.
 // The initial completion is result_known; wrap with NewResultUnknown when the
-// operation's final result cannot be determined.
+// operation's final result cannot be determined. Use NewNotStartedError for
+// generated validation or admission failures before target entry.
 func NewError(code ErrorCode, detailCode string) (*Error, error) {
 	boundary := &Error{
 		code:       code,
@@ -32,6 +33,21 @@ func NewError(code ErrorCode, detailCode string) (*Error, error) {
 	if !boundary.valid() {
 		return nil, ErrInvalidError
 	}
+	return boundary, nil
+}
+
+// NewNotStartedError creates a safe failure for generated validation or
+// admission that rejects a call before any target attempt enters concrete code.
+// It applies the same code and detail validation as NewError. An entered target
+// returning this error cannot claim that its outer invocation never started:
+// endpoint normalization promotes that outer result to result_known, or preserves
+// result_unknown when uncertainty is also present.
+func NewNotStartedError(code ErrorCode, detailCode string) (*Error, error) {
+	boundary, err := NewError(code, detailCode)
+	if err != nil {
+		return nil, err
+	}
+	boundary.completion = CompletionNotStarted
 	return boundary, nil
 }
 

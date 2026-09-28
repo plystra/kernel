@@ -75,6 +75,112 @@ func ExampleNewResultUnknown() {
 	// result_unknown
 }
 
+func ExampleNewNotStartedError() {
+	err, _ := invocation.NewNotStartedError(invocation.ErrorInvalidArgument, "contract.request_invalid")
+	fmt.Println(err.Code())
+	fmt.Println(invocation.CompletionOf(err))
+	// Output:
+	// invalid_argument
+	// not_started
+}
+
+func TestPublicNotStartedErrorConstructor(t *testing.T) {
+	for _, code := range []invocation.ErrorCode{
+		invocation.ErrorInvalidArgument, invocation.ErrorNotFound, invocation.ErrorConflict,
+		invocation.ErrorDenied, invocation.ErrorUnauthenticated, invocation.ErrorUnavailable,
+		invocation.ErrorTimeout, invocation.ErrorCancelled, invocation.ErrorInternal,
+		invocation.ErrorVersionIncompatible,
+	} {
+		boundary, err := invocation.NewNotStartedError(code, "contract.request_invalid")
+		if err != nil || boundary.Code() != code || boundary.DetailCode() != "contract.request_invalid" || boundary.Completion() != invocation.CompletionNotStarted {
+			t.Fatalf("NewNotStartedError(%s) = %v, %v", code, boundary, err)
+		}
+		for _, wrapped := range []error{boundary, fmt.Errorf("private wrapper: %w", boundary), errors.Join(boundary, boundary)} {
+			if invocation.CompletionOf(wrapped) != invocation.CompletionNotStarted {
+				t.Fatalf("wrapped rejection lost non-entry: %v", wrapped)
+			}
+		}
+		if errors.Is(boundary, context.Canceled) != (code == invocation.ErrorCancelled) || errors.Is(boundary, context.DeadlineExceeded) != (code == invocation.ErrorTimeout) {
+			t.Fatalf("context identities changed: %v", boundary)
+		}
+		if invocation.CompletionOf(invocation.NewResultUnknown(boundary)) != invocation.CompletionResultUnknown {
+			t.Fatal("rejection suppressed uncertainty")
+		}
+		known, err := invocation.NewError(code, "contract.request_invalid")
+		if err != nil || known.Completion() != invocation.CompletionResultKnown {
+			t.Fatal("known-result constructor changed")
+		}
+	}
+	for _, test := range []struct {
+		code   invocation.ErrorCode
+		detail string
+	}{
+		{"", ""}, {"unknown", "private details"}, {invocation.ErrorDenied, ""},
+		{invocation.ErrorInternal, "private details"}, {invocation.ErrorInternal, strings.Repeat("a", 129)},
+	} {
+		boundary, err := invocation.NewNotStartedError(test.code, test.detail)
+		if boundary != nil || !errors.Is(err, invocation.ErrInvalidError) {
+			t.Fatalf("invalid rejection = %v, %v", boundary, err)
+		}
+	}
+}
+
+func TestTargetCannotReturnNotStartedForItsEnteredOuterCall(t *testing.T) {
+	rejection, err := invocation.NewNotStartedError(invocation.ErrorInvalidArgument, "contract.request_invalid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, uncertain := range []bool{false, true} {
+		handle := publicErrorHandle(t, func(context.Context, error) (string, error) {
+			var err error = rejection
+			if uncertain {
+				err = invocation.NewResultUnknown(err)
+			}
+			return "private partial response", fmt.Errorf("private target wrapper: %w", err)
+		})
+		var wg sync.WaitGroup
+		for range 32 {
+			wg.Go(func() {
+				response, err := handle.Invoke(context.Background(), nil)
+				var boundary *invocation.Error
+				want := invocation.CompletionResultKnown
+				if uncertain {
+					want = invocation.CompletionResultUnknown
+				}
+				if response != "" || !errors.As(err, &boundary) || boundary.Code() != invocation.ErrorInvalidArgument || invocation.CompletionOf(err) != want {
+					t.Errorf("outer result = %q, %v (%s)", response, err, invocation.CompletionOf(err))
+				}
+				if strings.Contains(fmt.Sprint(err), "private") || rejection.Completion() != invocation.CompletionNotStarted {
+					t.Error("normalization leaked a cause or mutated a shared rejection")
+				}
+			})
+		}
+		wg.Wait()
+	}
+}
+
+func FuzzNewNotStartedError(f *testing.F) {
+	f.Add("invalid_argument", "contract.request_invalid")
+	f.Add("denied", "")
+	f.Add("internal", "private details")
+	f.Fuzz(func(t *testing.T, code, detail string) {
+		known, knownErr := invocation.NewError(invocation.ErrorCode(code), detail)
+		boundary, err := invocation.NewNotStartedError(invocation.ErrorCode(code), detail)
+		if (err != nil) != (knownErr != nil) {
+			t.Fatal("constructor validation differs")
+		}
+		if err != nil {
+			if boundary != nil || !errors.Is(err, invocation.ErrInvalidError) {
+				t.Fatal("invalid rejection is usable")
+			}
+			return
+		}
+		if boundary.Code() != known.Code() || boundary.DetailCode() != known.DetailCode() || boundary.Error() != known.Error() || invocation.CompletionOf(boundary) != invocation.CompletionNotStarted {
+			t.Fatal("rejection identity or completion differs")
+		}
+	})
+}
+
 func TestErrorCarriersNeverFormatPrivateCauses(t *testing.T) {
 	t.Parallel()
 	unknown := invocation.NewResultUnknown(&privateError{})
