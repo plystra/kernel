@@ -115,6 +115,26 @@ successful drain. Raw handles also do not clone request graphs: generated
 proxies and adapters own that isolation, and raw callers must not mutate storage
 shared with a still-running target after caller completion.
 
+`Handle.InvokeWithResponse(ctx, request, process)` lets generated proxies run
+their typed response validator and copier inside the tracked attempt. A
+successful target result is not released from lifetime tracking until that
+processor finishes. Shutdown therefore cannot stop an Implementation or
+Resource while the processor still reads its retained storage. The non-nil
+processor must perform only bounded, synchronous validation and copying and
+return independently owned storage; it must not retain target storage or start
+background work. `Invoke` remains the raw path without response processing.
+
+The processor is skipped on target failure, pre-entry rejection, or when the
+caller has already completed before processing begins. Cancellation or timeout
+during processing still completes the caller with `result_unknown`; drain
+continues waiting for the processor and discards its late outcome. Invalid
+response errors are safe internal failures with zero results. Valid internal
+detail codes such as `contract.response_invalid` and uncertainty survive bounded
+normalization, while private causes, semantic claims, panics, and `Goexit` do not
+escape as successful responses or caller-authored request errors. The Kernel
+does not inspect or copy application fields itself. Generated consumer adoption
+of this API remains incomplete.
+
 This Kernel API does not establish generated transport or SDK completion
 projection, generated shutdown integration, lifecycle-hook dependency access,
 admission-permit retention, retry governance, or separate telemetry events.
@@ -242,6 +262,7 @@ go test ./invocation -run '^$' -bench '^BenchmarkRegistryConcurrentRead$' -bench
 go test ./invocation -run '^$' -bench '^BenchmarkKernelCanonicalDispatch$' -benchmem -count=5
 go test ./invocation -run '^$' -bench '^BenchmarkInvocationErrorBoundary$' -benchmem -count=5
 go test ./invocation -run '^$' -bench '^BenchmarkCancelledTargetDrain$' -benchmem -count=5
+go test ./invocation -run '^$' -bench '^BenchmarkKernelResponseProcessing$' -benchmem -count=5
 ```
 
 Benchmark results depend on the machine and Go toolchain. Record that context

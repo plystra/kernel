@@ -455,7 +455,12 @@ func publicErrorHandle(t testing.TB, handler capability.Handler[error, string]) 
 
 func publicErrorRuntime(t testing.TB, timeout time.Duration, handler capability.Handler[error, string]) (invocation.Handle[error, string], *invocation.Dispatcher) {
 	t.Helper()
-	contract := capability.MustParseContractWithSemanticErrors[error, string]("example.error-boundary/v1", "already_exists", "not_ready")
+	return publicResponseRuntime(t, timeout, handler)
+}
+
+func publicResponseRuntime[Response any](t testing.TB, timeout time.Duration, handler capability.Handler[error, Response]) (invocation.Handle[error, Response], *invocation.Dispatcher) {
+	t.Helper()
+	contract := capability.MustParseContractWithSemanticErrors[error, Response]("example.error-boundary/v1", "already_exists", "not_ready")
 	endpoint, err := invocation.NewEndpoint(contract, handler)
 	if err != nil {
 		t.Fatal(err)

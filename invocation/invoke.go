@@ -3,20 +3,22 @@ package invocation
 import "context"
 
 const (
-	detailInvalidHandle         = "runtime.invalid_handle"
-	detailContextRequired       = "runtime.context_required"
-	detailDispatcherNotReady    = "runtime.dispatcher_not_ready"
-	detailCapabilityUnavailable = "runtime.capability_unavailable"
-	detailInvocationIDFailed    = "runtime.invocation_id_failed"
-	detailDeadlineExceeded      = "runtime.deadline_exceeded"
-	detailInvocationCancelled   = "runtime.cancelled"
-	detailProviderPanic         = "provider.panic_recovered"
-	detailContractMismatch      = "runtime.contract_mismatch"
-	detailInvalidEndpoint       = "runtime.invalid_endpoint"
-	detailProviderFailed        = "provider.failed"
-	detailErrorNormalization    = "runtime.error_normalization_failed"
-	detailDispatcherDraining    = "runtime.dispatcher_draining"
-	detailTargetExited          = "provider.exited_without_result"
+	detailInvalidHandle             = "runtime.invalid_handle"
+	detailContextRequired           = "runtime.context_required"
+	detailDispatcherNotReady        = "runtime.dispatcher_not_ready"
+	detailCapabilityUnavailable     = "runtime.capability_unavailable"
+	detailInvocationIDFailed        = "runtime.invocation_id_failed"
+	detailDeadlineExceeded          = "runtime.deadline_exceeded"
+	detailInvocationCancelled       = "runtime.cancelled"
+	detailProviderPanic             = "provider.panic_recovered"
+	detailContractMismatch          = "runtime.contract_mismatch"
+	detailInvalidEndpoint           = "runtime.invalid_endpoint"
+	detailProviderFailed            = "provider.failed"
+	detailErrorNormalization        = "runtime.error_normalization_failed"
+	detailDispatcherDraining        = "runtime.dispatcher_draining"
+	detailTargetExited              = "provider.exited_without_result"
+	detailResponseProcessorRequired = "runtime.response_processor_required"
+	detailResponseProcessingFailed  = "runtime.response_processing_failed"
 )
 
 // Invoke executes one exact canonical capability through raw Kernel dispatch.
@@ -25,6 +27,29 @@ const (
 // proxies and adapters own request isolation; raw callers must not share mutable
 // request storage with an executing target, including after caller completion.
 func (h Handle[Request, Response]) Invoke(ctx context.Context, request Request) (Response, error) {
+	return h.invoke(ctx, request, nil)
+}
+
+// InvokeWithResponse runs a generated response validator and copier inside the
+// tracked attempt, after a successful target result and before releasing its
+// lifetime. Drain therefore cannot permit dependency cleanup while process is
+// reading storage retained by the target. The processor must be non-nil, bounded,
+// side-effect-free, and return a graph with no mutable aliases to target storage.
+// It must not retain that storage or start asynchronous processing.
+//
+// Processor errors are normalized as internal failures, preserving valid safe
+// internal detail codes and result uncertainty but removing private causes.
+// Cancellation may complete the caller while processing continues; its late
+// result is discarded and the attempt remains registered until processing ends.
+func (h Handle[Request, Response]) InvokeWithResponse(ctx context.Context, request Request, process func(Response) (Response, error)) (Response, error) {
+	if process == nil {
+		var zero Response
+		return zero, newNotStartedBoundary(ErrorInvalidArgument, detailResponseProcessorRequired)
+	}
+	return h.invoke(ctx, request, process)
+}
+
+func (h Handle[Request, Response]) invoke(ctx context.Context, request Request, process func(Response) (Response, error)) (Response, error) {
 	var zero Response
 	if !h.valid() {
 		return zero, newNotStartedBoundary(ErrorInternal, detailInvalidHandle)
@@ -55,7 +80,7 @@ func (h Handle[Request, Response]) Invoke(ctx context.Context, request Request) 
 	}
 	defer cleanup()
 
-	response, boundary := invokeBounded(callContext, cleanup, h, binding, request)
+	response, boundary := invokeBounded(callContext, cleanup, h, binding, request, process)
 	if boundary != nil {
 		return zero, boundary
 	}
@@ -75,6 +100,7 @@ func invokeBounded[Request, Response any](
 	handle Handle[Request, Response],
 	binding Binding,
 	request Request,
+	process func(Response) (Response, error),
 ) (Response, error) {
 	var zero Response
 	if boundary := invocationContextError(ctx); boundary != nil {
@@ -89,7 +115,7 @@ func invokeBounded[Request, Response any](
 	if !handle.dispatcher.registerAttempt(attempt) {
 		return zero, newNotStartedBoundary(ErrorUnavailable, detailDispatcherDraining)
 	}
-	go executeAttempt(ctx, handle.dispatcher, binding.endpoint, request, result)
+	go executeAttempt(ctx, handle.dispatcher, binding.endpoint, request, result, process)
 	select {
 	case <-result.done:
 		if boundary := invocationContextError(ctx); boundary != nil {
@@ -101,10 +127,11 @@ func invokeBounded[Request, Response any](
 	}
 }
 
-func executeAttempt[Request, Response any](ctx context.Context, dispatcher *Dispatcher, endpoint Endpoint, request Request, result *targetResult[Response]) {
+func executeAttempt[Request, Response any](ctx context.Context, dispatcher *Dispatcher, endpoint Endpoint, request Request, result *targetResult[Response], process func(Response) (Response, error)) {
 	var response Response
 	var err error
 	returned := false
+	processing := false
 	attempt := &result.attempt
 	defer func() {
 		// Goexit runs defers without returning from the adapter. It must
@@ -113,6 +140,9 @@ func executeAttempt[Request, Response any](ctx context.Context, dispatcher *Disp
 			var zero Response
 			response = zero
 			err = newInvocationBoundary(ErrorInternal, detailTargetExited)
+			if processing {
+				err = newInvocationBoundary(ErrorInternal, detailResponseProcessingFailed)
+			}
 		}
 		dispatcher.mu.Lock()
 		if !attempt.abandoned {
@@ -134,6 +164,28 @@ func executeAttempt[Request, Response any](ctx context.Context, dispatcher *Disp
 	response, err = invokeEndpoint[Request, Response](ctx, endpoint, endpoint.definition, request)
 	if err != nil {
 		err = normalizeProviderError(err)
+	} else if process != nil {
+		boundary := invocationContextError(ctx)
+		dispatcher.mu.Lock()
+		abandoned := attempt.abandoned || dispatcher.draining
+		dispatcher.mu.Unlock()
+		if boundary != nil || abandoned {
+			if boundary == nil {
+				boundary = newInvocationBoundary(ErrorCancelled, detailInvocationCancelled)
+			}
+			boundary.completion = CompletionResultUnknown
+			err = boundary
+		} else {
+			processing = true
+			response, err = process(response)
+			if err != nil {
+				err = normalizeResponseError(err)
+			}
+		}
+	}
+	if err != nil {
+		var zero Response
+		response = zero
 	}
 	returned = true
 }

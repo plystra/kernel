@@ -61,7 +61,8 @@ func (d *Dispatcher) finishAttempt(attempt *targetAttempt) {
 
 // ActiveAttempts reports registered adapter executions, including scheduled
 // attempts and attempts whose callers have already completed. An attempt is
-// removed only after its adapter returns, panics, or exits its goroutine.
+// removed only after its adapter and any response processor finish, panic, or
+// exit their goroutine.
 func (d *Dispatcher) ActiveAttempts() int {
 	if !d.valid() {
 		return 0
@@ -83,10 +84,11 @@ func (d *Dispatcher) AdmissionClosed() bool {
 }
 
 // Drain permanently closes admission, cancels every registered target context,
-// and waits for actual adapter termination. It requires a deadline-bound
-// context and never stops lifecycle dependencies itself. A failed drain must
-// leave those dependencies live; retry with a fresh bounded context. Concurrent
-// drain callers share termination state but keep their own deadlines.
+// and waits for actual adapter and response-processor termination. It requires
+// a deadline-bound context and never stops lifecycle dependencies itself. A
+// failed drain must leave those dependencies live; retry with a fresh bounded
+// context. Concurrent drain callers share termination state but keep their own
+// deadlines.
 func (d *Dispatcher) Drain(ctx context.Context) error {
 	if !d.valid() {
 		return ErrInvalidDispatcher

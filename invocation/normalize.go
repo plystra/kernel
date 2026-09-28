@@ -88,3 +88,13 @@ func normalizeProviderError(providerError error) error {
 	}
 	return normalizeEndpointError(capability.Definition{}, providerError)
 }
+
+func normalizeResponseError(err error) *Error {
+	// A response check cannot manufacture a declared semantic outcome or blame
+	// a caller for invalid target output. Preserve only safe internal details.
+	boundary := normalizeEndpointError(capability.Definition{}, err).(*Error)
+	if boundary.code != ErrorInternal || boundary.detailCode == detailProviderFailed {
+		return &Error{code: ErrorInternal, detailCode: detailResponseProcessingFailed, completion: boundary.completion}
+	}
+	return boundary
+}

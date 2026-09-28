@@ -65,12 +65,43 @@ func TestDrainClosureBeforeContextCancellationReturnsNotStarted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	executeAttempt(context.Background(), dispatcher, endpoint, struct{}{}, result)
+	executeAttempt(context.Background(), dispatcher, endpoint, struct{}{}, result, nil)
 	var boundary *Error
 	if !errors.As(result.err, &boundary) || boundary.Code() != ErrorUnavailable || boundary.Completion() != CompletionNotStarted {
 		t.Fatalf("closure outcome = %v", result.err)
 	}
 	if dispatcher.ActiveAttempts() != 0 {
 		t.Fatal("rejected target retained its attempt")
+	}
+}
+
+func TestDrainClosureBeforeContextCancellationSuppressesResponseProcessor(t *testing.T) {
+	dispatcher := newTestDispatcher(t)
+	result := &targetResult[string]{attempt: targetAttempt{cancel: func() {}}, done: make(chan struct{})}
+	if !dispatcher.registerAttempt(&result.attempt) {
+		t.Fatal("attempt was not registered")
+	}
+	contract := capability.MustParseContract[struct{}, string]("example.closing/v1")
+	endpoint, err := NewEndpoint(contract, func(context.Context, struct{}) (string, error) {
+		expired, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+		defer cancel()
+		if err := dispatcher.Drain(expired); !errors.Is(err, ErrDrain) {
+			t.Fatalf("drain = %v", err)
+		}
+		return "unprocessed", nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	executeAttempt(context.Background(), dispatcher, endpoint, struct{}{}, result, func(value string) (string, error) {
+		t.Error("closed dispatcher started response processing")
+		return value, nil
+	})
+	var boundary *Error
+	if result.response != "" || !errors.As(result.err, &boundary) || boundary.Code() != ErrorCancelled || boundary.Completion() != CompletionResultUnknown {
+		t.Fatalf("closure outcome = %q, %v", result.response, result.err)
+	}
+	if dispatcher.ActiveAttempts() != 0 {
+		t.Fatal("suppressed response retained its attempt")
 	}
 }
