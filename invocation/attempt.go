@@ -3,6 +3,8 @@ package invocation
 import (
 	"context"
 	"errors"
+
+	"github.com/plystra/kernel/capability"
 )
 
 var (
@@ -18,16 +20,26 @@ type targetAttempt struct {
 	cancel    func()
 	entered   bool
 	abandoned bool
+	bindingID capability.Identifier
 }
 
-func (d *Dispatcher) registerAttempt(attempt *targetAttempt) bool {
+func (d *Dispatcher) registerAttempt(ctx context.Context, attempt *targetAttempt, binding Binding) *Error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.draining {
-		return false
+	if boundary := invocationContextError(ctx); boundary != nil {
+		return boundary
 	}
+	if d.draining {
+		return newNotStartedBoundary(ErrorUnavailable, detailDispatcherDraining)
+	}
+	identifier := binding.endpoint.definition.Identifier()
+	if d.inflight[identifier] >= binding.concurrencyLimit {
+		return newNotStartedBoundary(ErrorResourceExhausted, detailConcurrencyExhausted)
+	}
+	attempt.bindingID = identifier
+	d.inflight[identifier]++
 	d.attempts[attempt] = struct{}{}
-	return true
+	return nil
 }
 
 func (d *Dispatcher) enterAttempt(ctx context.Context, attempt *targetAttempt) bool {
@@ -54,6 +66,10 @@ func (d *Dispatcher) finishAttempt(attempt *targetAttempt) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	delete(d.attempts, attempt)
+	d.inflight[attempt.bindingID]--
+	if d.inflight[attempt.bindingID] == 0 {
+		delete(d.inflight, attempt.bindingID)
+	}
 	if d.draining && len(d.attempts) == 0 {
 		close(d.drained)
 	}

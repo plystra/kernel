@@ -22,6 +22,7 @@ func TestNewErrorSupportsEveryStandardClass(t *testing.T) {
 		ErrorCancelled,
 		ErrorInternal,
 		ErrorVersionIncompatible,
+		ErrorResourceExhausted,
 	} {
 		boundary, err := NewError(code, "contract.failure")
 		if err != nil {
@@ -47,6 +48,7 @@ func TestNewErrorAllowsEmptyDetailExceptForDenial(t *testing.T) {
 		ErrorCancelled,
 		ErrorInternal,
 		ErrorVersionIncompatible,
+		ErrorResourceExhausted,
 	} {
 		boundary, err := NewError(code, "")
 		if err != nil || !boundary.valid() || boundary.DetailCode() != "" {

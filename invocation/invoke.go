@@ -19,6 +19,7 @@ const (
 	detailTargetExited              = "provider.exited_without_result"
 	detailResponseProcessorRequired = "runtime.response_processor_required"
 	detailResponseProcessingFailed  = "runtime.response_processing_failed"
+	detailConcurrencyExhausted      = "runtime.concurrency_exhausted"
 )
 
 // Invoke executes one exact canonical capability through raw Kernel dispatch.
@@ -112,8 +113,8 @@ func invokeBounded[Request, Response any](
 
 	result := &targetResult[Response]{attempt: targetAttempt{cancel: cancel}, done: make(chan struct{})}
 	attempt := &result.attempt
-	if !handle.dispatcher.registerAttempt(attempt) {
-		return zero, newNotStartedBoundary(ErrorUnavailable, detailDispatcherDraining)
+	if boundary := handle.dispatcher.registerAttempt(ctx, attempt, binding); boundary != nil {
+		return zero, boundary
 	}
 	go executeAttempt(ctx, handle.dispatcher, binding.endpoint, request, result, process)
 	select {

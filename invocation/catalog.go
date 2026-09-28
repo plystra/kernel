@@ -82,32 +82,37 @@ type BindingOptions struct {
 	ModuleBuild     ModuleBuild
 	SelectionReason SelectionReason
 	ContractDigest  [sha256.Size]byte
+	// ConcurrencyLimit is the explicit positive bound on admitted attempts for
+	// this exact binding. Zero is invalid; assembly must resolve defaults.
+	ConcurrencyLimit int
 }
 
 // Binding joins one selected Implementation constructor, its module
 // provenance, and contract digest to its executable endpoint. Intrinsic
 // bindings deliberately have no constructor symbol.
 type Binding struct {
-	kind            BindingKind
-	constructor     string
-	moduleBuild     ModuleBuild
-	selectionReason SelectionReason
-	contractDigest  [sha256.Size]byte
-	endpoint        Endpoint
+	kind             BindingKind
+	constructor      string
+	moduleBuild      ModuleBuild
+	selectionReason  SelectionReason
+	contractDigest   [sha256.Size]byte
+	concurrencyLimit int
+	endpoint         Endpoint
 }
 
 // NewBinding validates one already-resolved executable endpoint. An ordinary
 // binding requires the exact selected constructor symbol; an intrinsic binding
 // must not have one. Every binding requires immutable module build provenance
-// for diagnostics.
+// for diagnostics and an explicit positive concurrency limit for admission.
 func NewBinding(options BindingOptions, endpoint Endpoint) (Binding, error) {
 	binding := Binding{
-		kind:            options.Kind,
-		constructor:     options.Constructor,
-		moduleBuild:     options.ModuleBuild,
-		selectionReason: options.SelectionReason,
-		contractDigest:  options.ContractDigest,
-		endpoint:        endpoint,
+		kind:             options.Kind,
+		constructor:      options.Constructor,
+		moduleBuild:      options.ModuleBuild,
+		selectionReason:  options.SelectionReason,
+		contractDigest:   options.ContractDigest,
+		concurrencyLimit: options.ConcurrencyLimit,
+		endpoint:         endpoint,
 	}
 	if !binding.valid() {
 		return Binding{}, ErrInvalidBinding
@@ -174,7 +179,22 @@ func (b Binding) ContractDigest() [sha256.Size]byte {
 	return b.contractDigest
 }
 
+// MaximumConcurrencyLimit bounds the supported per-binding admission limit.
+const MaximumConcurrencyLimit = 65_536
+
+// ConcurrencyLimit returns the immutable bound on admitted attempts, or zero
+// for an invalid binding. The Kernel does not choose an assembly default.
+func (b Binding) ConcurrencyLimit() int {
+	if !b.valid() {
+		return 0
+	}
+	return b.concurrencyLimit
+}
+
 func (b Binding) valid() bool {
+	if b.concurrencyLimit < 1 || b.concurrencyLimit > MaximumConcurrencyLimit {
+		return false
+	}
 	if !b.endpoint.valid() || !b.moduleBuild.Valid() || !b.selectionReason.Valid() || b.contractDigest == [sha256.Size]byte{} {
 		return false
 	}

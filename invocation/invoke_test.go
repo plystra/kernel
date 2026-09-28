@@ -91,10 +91,11 @@ func TestHandleInvokeDispatchesIntrinsicImplementation(t *testing.T) {
 		t.Fatalf("NewEndpoint: %v", err)
 	}
 	binding, err := NewBinding(BindingOptions{
-		Kind:            BindingKindIntrinsic,
-		ModuleBuild:     mustModuleBuild(t, "github.com/plystra/kernel", "v0.1.0", ""),
-		SelectionReason: SelectionReasonIntrinsic,
-		ContractDigest:  sha256.Sum256([]byte("kernel.info/v1 schema")),
+		Kind:             BindingKindIntrinsic,
+		ModuleBuild:      mustModuleBuild(t, "github.com/plystra/kernel", "v0.1.0", ""),
+		SelectionReason:  SelectionReasonIntrinsic,
+		ContractDigest:   sha256.Sum256([]byte("kernel.info/v1 schema")),
+		ConcurrencyLimit: 256,
 	}, endpoint)
 	if err != nil {
 		t.Fatalf("NewBinding: %v", err)
@@ -608,11 +609,12 @@ func newInvokeBinding(
 		t.Fatalf("NewEndpoint: %v", err)
 	}
 	binding, err := NewBinding(BindingOptions{
-		Kind:            BindingKindImplementation,
-		Constructor:     "github.com/acme/invoke/implementation.New",
-		ModuleBuild:     mustModuleBuild(t, "github.com/acme/invoke", "v1.0.0", ""),
-		SelectionReason: SelectionReasonUniqueCompatible,
-		ContractDigest:  sha256.Sum256([]byte(contract.Identifier().String() + " schema")),
+		Kind:             BindingKindImplementation,
+		Constructor:      "github.com/acme/invoke/implementation.New",
+		ModuleBuild:      mustModuleBuild(t, "github.com/acme/invoke", "v1.0.0", ""),
+		SelectionReason:  SelectionReasonUniqueCompatible,
+		ContractDigest:   sha256.Sum256([]byte(contract.Identifier().String() + " schema")),
+		ConcurrencyLimit: 256,
 	}, endpoint)
 	if err != nil {
 		t.Fatalf("NewBinding: %v", err)
@@ -645,11 +647,12 @@ func benchmarkInvokeRuntime(b *testing.B) (Handle[invokeRequest, invokeResponse]
 		b.Fatalf("NewEndpoint: %v", err)
 	}
 	binding, err := NewBinding(BindingOptions{
-		Kind:            BindingKindImplementation,
-		Constructor:     "github.com/acme/benchmark/implementation.New",
-		ModuleBuild:     mustModuleBuildBenchmark(b, "github.com/acme/benchmark", "v1.0.0", ""),
-		SelectionReason: SelectionReasonUniqueCompatible,
-		ContractDigest:  sha256.Sum256([]byte("example.benchmark-invoke/v1 schema")),
+		Kind:             BindingKindImplementation,
+		Constructor:      "github.com/acme/benchmark/implementation.New",
+		ModuleBuild:      mustModuleBuildBenchmark(b, "github.com/acme/benchmark", "v1.0.0", ""),
+		SelectionReason:  SelectionReasonUniqueCompatible,
+		ContractDigest:   sha256.Sum256([]byte("example.benchmark-invoke/v1 schema")),
+		ConcurrencyLimit: 256,
 	}, endpoint)
 	if err != nil {
 		b.Fatalf("NewBinding: %v", err)

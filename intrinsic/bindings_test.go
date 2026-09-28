@@ -60,6 +60,9 @@ func TestBindingsPublishHealthAndInfoWithoutOrdinaryPlugins(t *testing.T) {
 		t.Fatalf("bindings = %#v", bindings)
 	}
 	for _, binding := range bindings {
+		if binding.ConcurrencyLimit() != intrinsic.ConcurrencyLimit {
+			t.Fatal("intrinsic binding has an unexpected admission bound")
+		}
 		build := binding.ModuleBuild()
 		if binding.Kind() != invocation.BindingKindIntrinsic || binding.Constructor() != "" ||
 			binding.SelectionReason() != invocation.SelectionReasonIntrinsic || binding.ContractDigest() == [32]byte{} || build.ModulePath() != intrinsic.ModulePath ||

@@ -90,6 +90,7 @@ func TestPublicNotStartedErrorConstructor(t *testing.T) {
 		invocation.ErrorDenied, invocation.ErrorUnauthenticated, invocation.ErrorUnavailable,
 		invocation.ErrorTimeout, invocation.ErrorCancelled, invocation.ErrorInternal,
 		invocation.ErrorVersionIncompatible,
+		invocation.ErrorResourceExhausted,
 	} {
 		boundary, err := invocation.NewNotStartedError(code, "contract.request_invalid")
 		if err != nil || boundary.Code() != code || boundary.DetailCode() != "contract.request_invalid" || boundary.Completion() != invocation.CompletionNotStarted {
@@ -578,7 +579,8 @@ func publicResponseRuntime[Response any](t testing.TB, timeout time.Duration, ha
 	binding, err := invocation.NewBinding(invocation.BindingOptions{
 		Kind: invocation.BindingKindImplementation, Constructor: "github.com/acme/errors/implementation.New",
 		ModuleBuild: build, SelectionReason: invocation.SelectionReasonUniqueCompatible,
-		ContractDigest: sha256.Sum256([]byte("error-boundary-contract")),
+		ContractDigest:   sha256.Sum256([]byte("error-boundary-contract")),
+		ConcurrencyLimit: 256,
 	}, endpoint)
 	if err != nil {
 		t.Fatal(err)

@@ -15,6 +15,10 @@ import (
 // endpoint/catalog contract mismatch.
 var ErrBindings = errors.New("construct intrinsic Kernel capability bindings")
 
+// ConcurrencyLimit is the fixed per-Interface bound for intrinsic endpoints.
+// Application policy cannot replace the intrinsic runtime settings.
+const ConcurrencyLimit = 64
+
 // BindingOptions supplies immutable Kernel build provenance. ModuleVersion is
 // a canonical Go Module version when available. Development builds without a
 // version require a safe non-secret BuildIdentity.
@@ -73,10 +77,11 @@ func newBinding(build invocation.ModuleBuild, endpoint invocation.Endpoint) (inv
 		return invocation.Binding{}, fmt.Errorf("%w: catalog omits %s", ErrBindings, identifier.String())
 	}
 	binding, err := invocation.NewBinding(invocation.BindingOptions{
-		Kind:            invocation.BindingKindIntrinsic,
-		ModuleBuild:     build,
-		SelectionReason: invocation.SelectionReasonIntrinsic,
-		ContractDigest:  definition.SchemaDigest(),
+		Kind:             invocation.BindingKindIntrinsic,
+		ModuleBuild:      build,
+		SelectionReason:  invocation.SelectionReasonIntrinsic,
+		ContractDigest:   definition.SchemaDigest(),
+		ConcurrencyLimit: ConcurrencyLimit,
 	}, endpoint)
 	if err != nil {
 		return invocation.Binding{}, fmt.Errorf("%w: bind %s: %w", ErrBindings, identifier.String(), err)

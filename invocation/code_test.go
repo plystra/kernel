@@ -19,6 +19,7 @@ func TestErrorCodesHaveStableUniqueValues(t *testing.T) {
 		{invocation.ErrorDenied, "denied"},
 		{invocation.ErrorUnauthenticated, "unauthenticated"},
 		{invocation.ErrorUnavailable, "unavailable"},
+		{invocation.ErrorResourceExhausted, "resource_exhausted"},
 		{invocation.ErrorTimeout, "timeout"},
 		{invocation.ErrorCancelled, "cancelled"},
 		{invocation.ErrorInternal, "internal"},

@@ -16,6 +16,7 @@ const (
 	ErrorDenied              ErrorCode = "denied"
 	ErrorUnauthenticated     ErrorCode = "unauthenticated"
 	ErrorUnavailable         ErrorCode = "unavailable"
+	ErrorResourceExhausted   ErrorCode = "resource_exhausted"
 	ErrorTimeout             ErrorCode = "timeout"
 	ErrorCancelled           ErrorCode = "cancelled"
 	ErrorInternal            ErrorCode = "internal"
@@ -36,6 +37,7 @@ func (c ErrorCode) Valid() bool {
 		ErrorDenied,
 		ErrorUnauthenticated,
 		ErrorUnavailable,
+		ErrorResourceExhausted,
 		ErrorTimeout,
 		ErrorCancelled,
 		ErrorInternal,

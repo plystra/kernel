@@ -33,6 +33,7 @@ type Dispatcher struct {
 	catalog        atomic.Pointer[catalogState]
 	mu             sync.Mutex
 	attempts       map[*targetAttempt]struct{}
+	inflight       map[capability.Identifier]int
 	draining       bool
 	drained        chan struct{}
 }
@@ -46,6 +47,7 @@ func NewDispatcher(options DispatcherOptions) (*Dispatcher, error) {
 	return &Dispatcher{
 		defaultTimeout: options.DefaultTimeout,
 		attempts:       make(map[*targetAttempt]struct{}),
+		inflight:       make(map[capability.Identifier]int),
 		drained:        make(chan struct{}),
 	}, nil
 }

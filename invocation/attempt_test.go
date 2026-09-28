@@ -12,7 +12,9 @@ import (
 func TestAbandonedScheduledAttemptCannotEnterTarget(t *testing.T) {
 	dispatcher := newTestDispatcher(t)
 	attempt := &targetAttempt{cancel: func() {}}
-	if !dispatcher.registerAttempt(attempt) {
+	binding := testBinding(t, "example.attempt/v1")
+	binding.concurrencyLimit = 1
+	if dispatcher.registerAttempt(context.Background(), attempt, binding) != nil {
 		t.Fatal("attempt was not registered")
 	}
 	boundary := dispatcher.abandonAttempt(attempt, newNotStartedBoundary(ErrorCancelled, detailInvocationCancelled))
@@ -22,7 +24,15 @@ func TestAbandonedScheduledAttemptCannotEnterTarget(t *testing.T) {
 	if dispatcher.ActiveAttempts() != 1 {
 		t.Fatal("scheduled worker lost ownership before acknowledging abandonment")
 	}
+	next := &targetAttempt{cancel: func() {}}
+	if err := dispatcher.registerAttempt(context.Background(), next, binding); err == nil || err.Code() != ErrorResourceExhausted {
+		t.Fatalf("scheduled worker released its permit early: %v", err)
+	}
 	dispatcher.finishAttempt(attempt)
+	if err := dispatcher.registerAttempt(context.Background(), next, binding); err != nil {
+		t.Fatalf("acknowledged abandonment retained its permit: %v", err)
+	}
+	dispatcher.finishAttempt(next)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	if err := dispatcher.Drain(ctx); err != nil {
@@ -33,7 +43,7 @@ func TestAbandonedScheduledAttemptCannotEnterTarget(t *testing.T) {
 func TestEnteredAttemptRetainsUnknownCompletionUntilTermination(t *testing.T) {
 	dispatcher := newTestDispatcher(t)
 	attempt := &targetAttempt{cancel: func() {}}
-	if !dispatcher.registerAttempt(attempt) {
+	if dispatcher.registerAttempt(context.Background(), attempt, testBinding(t, "example.attempt/v1")) != nil {
 		t.Fatal("attempt was not registered")
 	}
 	if !dispatcher.enterAttempt(context.Background(), attempt) {
@@ -49,7 +59,7 @@ func TestEnteredAttemptRetainsUnknownCompletionUntilTermination(t *testing.T) {
 func TestDrainClosureBeforeContextCancellationReturnsNotStarted(t *testing.T) {
 	dispatcher := newTestDispatcher(t)
 	result := &targetResult[struct{}]{attempt: targetAttempt{cancel: func() {}}, done: make(chan struct{})}
-	if !dispatcher.registerAttempt(&result.attempt) {
+	if dispatcher.registerAttempt(context.Background(), &result.attempt, testBinding(t, "example.closing/v1")) != nil {
 		t.Fatal("attempt was not registered")
 	}
 	expired, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
@@ -78,7 +88,7 @@ func TestDrainClosureBeforeContextCancellationReturnsNotStarted(t *testing.T) {
 func TestDrainClosureBeforeContextCancellationSuppressesResponseProcessor(t *testing.T) {
 	dispatcher := newTestDispatcher(t)
 	result := &targetResult[string]{attempt: targetAttempt{cancel: func() {}}, done: make(chan struct{})}
-	if !dispatcher.registerAttempt(&result.attempt) {
+	if dispatcher.registerAttempt(context.Background(), &result.attempt, testBinding(t, "example.closing/v1")) != nil {
 		t.Fatal("attempt was not registered")
 	}
 	contract := capability.MustParseContract[struct{}, string]("example.closing/v1")

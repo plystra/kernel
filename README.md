@@ -140,13 +140,39 @@ response errors are safe internal failures with zero results. Valid internal
 detail codes such as `contract.response_invalid` and uncertainty survive bounded
 normalization, while private causes, semantic claims, panics, and `Goexit` do not
 escape as successful responses or caller-authored request errors. The Kernel
-does not inspect or copy application fields itself. Generated consumer adoption
-of this API remains incomplete.
+does not inspect or copy application fields itself.
 
-This Kernel API does not establish generated transport or SDK completion
-projection, generated shutdown integration, lifecycle-hook dependency access,
-admission-permit retention, retry governance, or separate telemetry events.
-Those integration and policy outcomes remain incomplete.
+Generated consumer evidence is tracked separately in the philosophy roadmap;
+this Kernel boundary alone does not establish lifecycle-hook dependency access,
+retry governance, or separate telemetry events.
+
+### Admission accounting
+
+`BindingOptions.ConcurrencyLimit` is mandatory and must be between 1 and
+`invocation.MaximumConcurrencyLimit` (65,536), inclusive. `NewBinding` rejects
+zero, negative, or over-bound values instead of silently supplying a default.
+`Binding.ConcurrencyLimit()` exposes the immutable resolved value. Assembly
+must supply it for every binding. This is a breaking assembly-input change;
+older generated bindings must be regenerated with a compatible CLI before
+adopting this Kernel revision. The currently pinned CLI consumer has not yet
+adopted this input.
+
+Admission is scoped to one exact Interface binding in one dispatcher, not to
+a handle, constructor, or shared catalog. The current primitive has no queue:
+saturation returns `ErrorResourceExhausted` (`resource_exhausted`) with
+`runtime.concurrency_exhausted` and `not_started`, without starting a worker
+or response processor. The runtime reserves capacity before scheduling the
+target and retains it until the adapter and response processor finish, panic,
+or exit. Caller cancellation, deadlines, and failed shutdown drains do not
+release that capacity. A scheduled attempt abandoned before entry releases it
+when its worker acknowledges abandonment. Shutdown closure takes precedence
+over saturation for otherwise live calls and remains permanent after drain.
+
+`intrinsic.NewBindings` supplies the fixed `intrinsic.ConcurrencyLimit` of 64
+for each intrinsic Interface. Ordinary assembly supplies its own explicit
+limits. No queue, retry, full compiled-policy schema, CLI-advertised absence
+default, or generated policy enforcement is implied by this Kernel primitive.
+Those policy and consumer outcomes remain incomplete.
 
 ## Implementation lifecycle
 
@@ -271,6 +297,7 @@ go test ./invocation -run '^$' -bench '^BenchmarkKernelCanonicalDispatch$' -benc
 go test ./invocation -run '^$' -bench '^BenchmarkInvocationErrorBoundary$' -benchmem -count=5
 go test ./invocation -run '^$' -bench '^BenchmarkCancelledTargetDrain$' -benchmem -count=5
 go test ./invocation -run '^$' -bench '^BenchmarkKernelResponseProcessing$' -benchmem -count=5
+go test ./invocation -run '^$' -bench '^BenchmarkAdmissionConcurrent$' -benchmem -count=5
 ```
 
 Benchmark results depend on the machine and Go toolchain. Record that context
