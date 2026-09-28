@@ -15,10 +15,15 @@ const (
 	detailInvalidEndpoint       = "runtime.invalid_endpoint"
 	detailProviderFailed        = "provider.failed"
 	detailErrorNormalization    = "runtime.error_normalization_failed"
+	detailDispatcherDraining    = "runtime.dispatcher_draining"
+	detailTargetExited          = "provider.exited_without_result"
 )
 
 // Invoke executes one exact canonical capability through raw Kernel dispatch.
 // Every entered invocation is deadline-bound and normalized to safe errors.
+// Cancellation may complete the caller before the target terminates. Generated
+// proxies and adapters own request isolation; raw callers must not share mutable
+// request storage with an executing target, including after caller completion.
 func (h Handle[Request, Response]) Invoke(ctx context.Context, request Request) (Response, error) {
 	var zero Response
 	if !h.valid() {
@@ -50,15 +55,23 @@ func (h Handle[Request, Response]) Invoke(ctx context.Context, request Request) 
 	}
 	defer cleanup()
 
-	response, boundary := invokeBounded(callContext, h, binding, request)
+	response, boundary := invokeBounded(callContext, cleanup, h, binding, request)
 	if boundary != nil {
 		return zero, boundary
 	}
 	return response, nil
 }
 
+type targetResult[Response any] struct {
+	attempt  targetAttempt
+	response Response
+	err      error
+	done     chan struct{}
+}
+
 func invokeBounded[Request, Response any](
 	ctx context.Context,
+	cancel func(),
 	handle Handle[Request, Response],
 	binding Binding,
 	request Request,
@@ -71,15 +84,58 @@ func invokeBounded[Request, Response any](
 		return zero, newNotStartedBoundary(ErrorInternal, detailContractMismatch)
 	}
 
-	response, err := invokeEndpoint[Request, Response](ctx, binding.endpoint, handle.definition, request)
-	if boundary := invocationContextError(ctx); boundary != nil {
-		boundary.completion = CompletionResultUnknown
-		return zero, boundary
+	result := &targetResult[Response]{attempt: targetAttempt{cancel: cancel}, done: make(chan struct{})}
+	attempt := &result.attempt
+	if !handle.dispatcher.registerAttempt(attempt) {
+		return zero, newNotStartedBoundary(ErrorUnavailable, detailDispatcherDraining)
 	}
+	go executeAttempt(ctx, handle.dispatcher, binding.endpoint, request, result)
+	select {
+	case <-result.done:
+		if boundary := invocationContextError(ctx); boundary != nil {
+			return zero, handle.dispatcher.abandonAttempt(attempt, boundary)
+		}
+		return result.response, result.err
+	case <-ctx.Done():
+		return zero, handle.dispatcher.abandonAttempt(attempt, invocationContextError(ctx))
+	}
+}
+
+func executeAttempt[Request, Response any](ctx context.Context, dispatcher *Dispatcher, endpoint Endpoint, request Request, result *targetResult[Response]) {
+	var response Response
+	var err error
+	returned := false
+	attempt := &result.attempt
+	defer func() {
+		// Goexit runs defers without returning from the adapter. It must
+		// release attempt ownership and cannot become a zero-value success.
+		if recover() != nil || !returned {
+			var zero Response
+			response = zero
+			err = newInvocationBoundary(ErrorInternal, detailTargetExited)
+		}
+		dispatcher.mu.Lock()
+		if !attempt.abandoned {
+			result.response, result.err = response, err
+		}
+		dispatcher.mu.Unlock()
+		dispatcher.finishAttempt(attempt)
+		close(result.done)
+	}()
+	if !dispatcher.enterAttempt(ctx, attempt) {
+		boundary := invocationContextError(ctx)
+		if boundary == nil {
+			boundary = newNotStartedBoundary(ErrorUnavailable, detailDispatcherDraining)
+		}
+		err = boundary
+		returned = true
+		return
+	}
+	response, err = invokeEndpoint[Request, Response](ctx, endpoint, endpoint.definition, request)
 	if err != nil {
-		return zero, normalizeProviderError(err)
+		err = normalizeProviderError(err)
 	}
-	return response, nil
+	returned = true
 }
 
 func invocationContextError(ctx context.Context) *Error {

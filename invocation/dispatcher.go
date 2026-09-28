@@ -2,6 +2,7 @@ package invocation
 
 import (
 	"errors"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -16,6 +17,8 @@ var (
 	ErrCatalogPublished = errors.New("capability endpoint catalog already published")
 	// ErrDispatcherNotReady reports that no complete catalog is live yet.
 	ErrDispatcherNotReady = errors.New("capability dispatcher is not ready")
+	// ErrDispatcherDraining reports permanent admission closure during shutdown.
+	ErrDispatcherDraining = errors.New("capability dispatcher admission is closed")
 )
 
 // DispatcherOptions configures mandatory runtime dispatch behavior.
@@ -28,6 +31,10 @@ type DispatcherOptions struct {
 type Dispatcher struct {
 	defaultTimeout time.Duration
 	catalog        atomic.Pointer[catalogState]
+	mu             sync.Mutex
+	attempts       map[*targetAttempt]struct{}
+	draining       bool
+	drained        chan struct{}
 }
 
 // NewDispatcher creates an unpublished Dispatcher with a positive default
@@ -38,6 +45,8 @@ func NewDispatcher(options DispatcherOptions) (*Dispatcher, error) {
 	}
 	return &Dispatcher{
 		defaultTimeout: options.DefaultTimeout,
+		attempts:       make(map[*targetAttempt]struct{}),
+		drained:        make(chan struct{}),
 	}, nil
 }
 
@@ -52,13 +61,19 @@ func (d *Dispatcher) Publish(catalog Catalog) error {
 		return ErrInvalidCatalog
 	}
 	state := cloneCatalogState(catalog.state)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.draining {
+		return ErrDispatcherDraining
+	}
 	if !d.catalog.CompareAndSwap(nil, state) {
 		return ErrCatalogPublished
 	}
 	return nil
 }
 
-// Published reports whether one complete executable catalog is live.
+// Published reports whether one complete executable catalog was published.
+// Publication is immutable and does not imply admission remains open.
 func (d *Dispatcher) Published() bool {
 	return d.valid() && d.catalog.Load() != nil
 }

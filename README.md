@@ -88,10 +88,37 @@ remain a deadline while also reporting `result_unknown`. Incomplete error-tree
 traversal conservatively returns internal failure with `result_unknown`; the
 public completion helper also treats unclassified or invalid errors as unknown.
 
+### Target lifetime and drain
+
+Dispatch runs each adapter in a tracked goroutine. Caller cancellation or the
+effective deadline returns without waiting for an uncooperative target. When
+this happens after entry, the caller receives `result_unknown` and the target
+remains registered until its adapter actually returns, panics, or exits its
+goroutine. A scheduled target
+abandoned before entry cannot enter later and returns `not_started`. Late
+responses and errors are discarded; a target calling `runtime.Goexit` is a
+redacted internal failure rather than a zero-value success.
+
+`Dispatcher.ActiveAttempts()` counts registered adapter executions, including
+scheduled work and targets whose callers already completed.
+`Dispatcher.Drain(ctx)` requires a non-nil context with a deadline, permanently
+closes admission, cancels active target contexts, and waits for actual
+termination. Invalid contexts leave admission unchanged. An expired or
+cancelled drain reports `ErrDrain` with only the standard context cause; a
+fresh bounded call can resume the same drain. Concurrent callers have
+independent wait deadlines. `AdmissionClosed()` reports permanent closure;
+`Published()` remains an independent immutable-catalog fact, not readiness.
+
+Drain never stops an Implementation or Resource. Its owner must leave
+dependencies live on failure and invoke lifecycle cleanup only after a
+successful drain. Raw handles also do not clone request graphs: generated
+proxies and adapters own that isolation, and raw callers must not mutate storage
+shared with a still-running target after caller completion.
+
 This Kernel API does not establish generated transport or SDK completion
-projection. Caller completion independent of an uncooperative target, actual
-attempt tracking, admission-permit retention, and shutdown drain remain separate
-runtime work; dispatch is currently synchronous.
+projection, generated shutdown integration, lifecycle-hook dependency access,
+admission-permit retention, retry governance, or separate telemetry events.
+Those integration and policy outcomes remain incomplete.
 
 ## Implementation lifecycle
 
@@ -214,9 +241,11 @@ go test ./invocation -run '^$' -bench '^BenchmarkCapabilityLookup$' -benchmem -c
 go test ./invocation -run '^$' -bench '^BenchmarkRegistryConcurrentRead$' -benchmem -count=5
 go test ./invocation -run '^$' -bench '^BenchmarkKernelCanonicalDispatch$' -benchmem -count=5
 go test ./invocation -run '^$' -bench '^BenchmarkInvocationErrorBoundary$' -benchmem -count=5
+go test ./invocation -run '^$' -bench '^BenchmarkCancelledTargetDrain$' -benchmem -count=5
 ```
 
 Benchmark results depend on the machine and Go toolchain. Record that context
 with local evidence and compare applicable results with the binding Kernel
 runtime performance requirements; do not treat one machine's numbers as
-universal expectations.
+universal expectations. The cancelled-target drain benchmark includes fresh
+dispatcher and catalog construction because admission closure is permanent.
