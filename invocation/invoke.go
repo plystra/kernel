@@ -70,7 +70,7 @@ func (h Handle[Request, Response]) InvokeWithPreparation(ctx context.Context, re
 	return h.invoke(ctx, request, prepare, process)
 }
 
-func (h Handle[Request, Response]) invoke(ctx context.Context, request Request, prepare func(Request) (Request, error), process func(Response) (Response, error)) (Response, error) {
+func (h Handle[Request, Response]) invoke(ctx context.Context, request Request, prepare func(Request) (Request, error), process func(Response) (Response, error)) (response Response, err error) {
 	started := time.Now()
 	var zero Response
 	if !h.valid() {
@@ -91,6 +91,9 @@ func (h Handle[Request, Response]) invoke(ctx context.Context, request Request, 
 	if !exists {
 		return zero, newNotStartedBoundary(ErrorUnavailable, detailCapabilityUnavailable)
 	}
+	defer func() {
+		recordInvocationMetric(h.dispatcher.metrics.caller, binding.endpoint.definition, binding.constructor, time.Since(started), err, false, false)
+	}()
 
 	invocationID, err := NewInvocationID()
 	if err != nil {
@@ -168,7 +171,7 @@ func invokeBounded[Request, Response any](
 	if boundary := handle.dispatcher.registerAttempt(ctx, attempt, binding); boundary != nil {
 		return zero, boundary
 	}
-	go executeAttempt(ctx, handle.dispatcher, binding.endpoint, request, result, process)
+	go executeAttempt(ctx, handle.dispatcher, binding.endpoint, binding.constructor, request, result, process)
 	select {
 	case <-result.done:
 		if boundary := invocationContextError(ctx); boundary != nil {
@@ -180,9 +183,10 @@ func invokeBounded[Request, Response any](
 	}
 }
 
-func executeAttempt[Request, Response any](ctx context.Context, dispatcher *Dispatcher, endpoint Endpoint, request Request, result *targetResult[Response], process func(Response) (Response, error)) {
+func executeAttempt[Request, Response any](ctx context.Context, dispatcher *Dispatcher, endpoint Endpoint, constructor string, request Request, result *targetResult[Response], process func(Response) (Response, error)) {
 	var response Response
 	var err error
+	var started time.Time
 	returned := false
 	processing := false
 	attempt := &result.attempt
@@ -198,10 +202,14 @@ func executeAttempt[Request, Response any](ctx context.Context, dispatcher *Disp
 			}
 		}
 		dispatcher.mu.Lock()
+		late := attempt.abandoned
 		if !attempt.abandoned {
 			result.response, result.err = response, err
 		}
 		dispatcher.mu.Unlock()
+		if !started.IsZero() {
+			recordInvocationMetric(dispatcher.metrics.target, endpoint.definition, constructor, time.Since(started), err, true, late)
+		}
 		dispatcher.finishAttempt(attempt)
 		close(result.done)
 	}()
@@ -214,6 +222,7 @@ func executeAttempt[Request, Response any](ctx context.Context, dispatcher *Disp
 		returned = true
 		return
 	}
+	started = time.Now()
 	response, err = invokeEndpoint[Request, Response](ctx, endpoint, endpoint.definition, request)
 	if err != nil {
 		err = normalizeProviderError(err)

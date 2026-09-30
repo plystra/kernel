@@ -143,8 +143,9 @@ escape as successful responses or caller-authored request errors. The Kernel
 does not inspect or copy application fields itself.
 
 Generated consumer evidence is tracked separately in the philosophy roadmap;
-this Kernel boundary alone does not establish lifecycle-hook dependency access,
-generated policy execution, or separate telemetry events.
+this Kernel boundary alone does not establish lifecycle-hook dependency access
+or generated consumer acceptance. Separate lifetime metrics are described under
+[Telemetry and audit](#telemetry-and-audit).
 
 ### Compiled invocation policies
 
@@ -199,10 +200,9 @@ Raw `Invoke` and `InvokeWithResponse` callers must supply their own immutable
 snapshot and adapter copying when enabling retries.
 
 This is a breaking assembly API change: the old dispatcher `DefaultTimeout`
-and standalone binding `ConcurrencyLimit` inputs are removed. The CLI remains
-pinned to its earlier compatible Kernel revision until generated policy input,
-preparation, error restoration, capability facts, and acceptance are integrated.
-This Kernel implementation alone does not establish generated policy support.
+and standalone binding `ConcurrencyLimit` inputs are removed. Generated static
+timeout and replay-safe retry acceptance is recorded at `cli@f944e75` and
+`cli@b91e237` in the philosophy roadmap; other policy stages remain incomplete.
 
 ### Admission accounting
 
@@ -226,7 +226,7 @@ over saturation for otherwise live calls and remains permanent after drain.
 `intrinsic.NewBindings` supplies the fixed `intrinsic.ConcurrencyLimit` of 64
 for each intrinsic Interface. Ordinary assembly supplies its own explicit
 limits. The compiled-policy boundary above owns timeout and retry execution;
-queue, circuit, and generated policy acceptance remain incomplete.
+queue, circuit, and authored generated concurrency acceptance remain incomplete.
 
 ## Implementation lifecycle
 
@@ -275,7 +275,47 @@ The canonical authored packages are `interfaces/kernel/health/v1` and `interface
 
 ## Telemetry and audit
 
-The Kernel emits its own bounded runtime logs, metrics, traces, health state, and implementation diagnostics. It never calls `audit.write/v1`.
+The Kernel owns intrinsic runtime telemetry and never calls `audit.write/v1`.
+The implemented invocation telemetry is two OpenTelemetry duration histograms
+under the `github.com/plystra/kernel/invocation` instrumentation scope:
+
+| Instrument | Sample boundary |
+| --- | --- |
+| `plystra.invocation.caller.duration` | One sample per logical call after resolving an available published binding, through caller completion, including preparation, attempts, and backoff |
+| `plystra.invocation.target.duration` | One sample per entered target attempt, from entry through adapter and response-processor termination |
+
+Both use seconds and fixed bucket boundaries of 0.001, 0.005, 0.01, 0.05, 0.1,
+0.5, 1, 5, 10, 30, and 60 seconds unless the application's SDK view overrides
+aggregation. Histogram counts therefore distinguish logical calls from actual
+target executions. Pre-entry rejection contributes no target sample. A late
+success, failure, panic, or goroutine exit cannot rewrite the caller's recorded
+outcome, release a permit early, or create another call sample.
+
+Labels are limited to `plystra.interface.id`,
+`plystra.implementation.constructor` (empty for intrinsic bindings),
+`plystra.invocation.outcome` (`success`, `runtime_error`, or `semantic_error`),
+`plystra.error.code` (empty on success, a closed runtime code, or a declared
+semantic code), and `plystra.invocation.completion`. Target samples also carry
+the boolean `plystra.invocation.target.late`, which reports whether the caller
+had abandoned that attempt when its termination was observed. They include no
+request, response, arbitrary error text or detail code, opaque context metadata,
+request/trace/invocation ID, source path, module build identity, or configuration.
+Metric recording receives a background context, so it does not propagate caller
+data or trace exemplars. Dormant bindings emit nothing.
+
+`DispatcherOptions.MeterProvider` optionally supplies the application's
+OpenTelemetry provider; nil uses the standard global delegating provider. With
+no installed SDK, instruments are no-ops and the Kernel starts no exporter,
+network connection, background reader, or telemetry queue. The owner configures
+bounded SDK aggregation/export and shuts down its provider after invocation
+drain. The Kernel neither takes ownership of that provider nor requires an
+application Implementation for metrics. Instrument construction errors fail
+dispatcher creation with redacted `ErrInvalidTelemetry`; recording panics do
+not replace invocation results or prevent attempt cleanup. Custom providers
+must obey the synchronous, concurrency-safe OpenTelemetry API contract.
+
+This producer boundary does not establish generated-Project telemetry
+acceptance, governed spans, broader intrinsic logs, or telemetry export setup.
 
 CLI-generated application invocation audit and explicit business audit events are separate application concerns. Removing an Audit plugin can remove its generated application behavior but cannot change Kernel telemetry or dispatch.
 
@@ -353,6 +393,7 @@ go test ./invocation -run '^$' -bench '^BenchmarkCancelledTargetDrain$' -benchme
 go test ./invocation -run '^$' -bench '^BenchmarkKernelResponseProcessing$' -benchmem -count=5
 go test ./invocation -run '^$' -bench '^BenchmarkAdmissionConcurrent$' -benchmem -count=5
 go test ./invocation -run '^$' -bench '^BenchmarkCompiledPolicy$' -benchmem -count=5
+go test ./invocation -run '^$' -bench '^BenchmarkInvocationLifetimeMetrics$' -benchmem -count=5
 ```
 
 Benchmark results depend on the machine and Go toolchain. Record that context

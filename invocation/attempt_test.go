@@ -35,7 +35,7 @@ func TestScheduledAttemptCannotEnterAfterBudgetBeforeTimerCallback(t *testing.T)
 		if err != nil {
 			t.Fatal(err)
 		}
-		executeAttempt(ctx, dispatcher, endpoint, struct{}{}, result, nil)
+		executeAttempt(ctx, dispatcher, endpoint, "", struct{}{}, result, nil)
 		var boundary *Error
 		if !errors.As(result.err, &boundary) || boundary.Code() != ErrorTimeout || boundary.Completion() != CompletionNotStarted || dispatcher.ActiveAttempts() != 0 {
 			t.Fatalf("scheduled expiration = %v", result.err)
@@ -109,7 +109,7 @@ func TestDrainClosureBeforeContextCancellationReturnsNotStarted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	executeAttempt(context.Background(), dispatcher, endpoint, struct{}{}, result, nil)
+	executeAttempt(context.Background(), dispatcher, endpoint, "", struct{}{}, result, nil)
 	var boundary *Error
 	if !errors.As(result.err, &boundary) || boundary.Code() != ErrorUnavailable || boundary.Completion() != CompletionNotStarted {
 		t.Fatalf("closure outcome = %v", result.err)
@@ -137,7 +137,7 @@ func TestDrainClosureBeforeContextCancellationSuppressesResponseProcessor(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	executeAttempt(context.Background(), dispatcher, endpoint, struct{}{}, result, func(value string) (string, error) {
+	executeAttempt(context.Background(), dispatcher, endpoint, "", struct{}{}, result, func(value string) (string, error) {
 		t.Error("closed dispatcher started response processing")
 		return value, nil
 	})

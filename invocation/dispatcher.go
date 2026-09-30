@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 
 	"github.com/plystra/kernel/capability"
+	"go.opentelemetry.io/otel/metric"
 )
 
 var (
@@ -23,6 +24,9 @@ var (
 // DispatcherOptions configures mandatory runtime dispatch behavior.
 type DispatcherOptions struct {
 	PolicyVersion int
+	// MeterProvider receives intrinsic lifetime metrics. Nil uses the global
+	// OpenTelemetry provider; the Kernel does not configure exporters or own it.
+	MeterProvider metric.MeterProvider
 }
 
 // Dispatcher owns one atomically published immutable executable catalog. A
@@ -36,6 +40,7 @@ type Dispatcher struct {
 	draining      bool
 	drained       chan struct{}
 	closing       chan struct{}
+	metrics       invocationMetrics
 }
 
 // NewDispatcher creates an unpublished Dispatcher for the exact compiled-policy
@@ -44,12 +49,17 @@ func NewDispatcher(options DispatcherOptions) (*Dispatcher, error) {
 	if options.PolicyVersion != PolicySchemaVersion {
 		return nil, ErrInvalidDispatcher
 	}
+	metrics, err := newInvocationMetrics(options.MeterProvider)
+	if err != nil {
+		return nil, err
+	}
 	return &Dispatcher{
 		policyVersion: options.PolicyVersion,
 		attempts:      make(map[*targetAttempt]struct{}),
 		inflight:      make(map[capability.Identifier]int),
 		drained:       make(chan struct{}),
 		closing:       make(chan struct{}),
+		metrics:       metrics,
 	}, nil
 }
 
