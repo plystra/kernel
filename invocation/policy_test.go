@@ -128,6 +128,9 @@ func policyRuntime(t testing.TB, policy invocation.Policy, handler capability.Ha
 	if err := dispatcher.Publish(catalog); err != nil {
 		t.Fatal(err)
 	}
+	if err := dispatcher.OpenAdmission(); err != nil {
+		t.Fatal(err)
+	}
 	handle, err := invocation.NewHandle(dispatcher, policyTestContract, true)
 	if err != nil {
 		t.Fatal(err)

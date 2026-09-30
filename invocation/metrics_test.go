@@ -69,6 +69,9 @@ func metricRuntime(t testing.TB, provider metric.MeterProvider, id string, polic
 	if err := dispatcher.Publish(catalog); err != nil {
 		t.Fatal(err)
 	}
+	if err := dispatcher.OpenAdmission(); err != nil {
+		t.Fatal(err)
+	}
 	handle, err := invocation.NewHandle(dispatcher, contract, true)
 	if err != nil {
 		t.Fatal(err)
@@ -129,6 +132,53 @@ func assertMetric(t testing.TB, points []metricdata.HistogramDataPoint[float64],
 	}
 	t.Fatalf("missing metric %s %s %s %s late=%v in %#v", id, outcome, code, completion, late, points)
 	return metricdata.HistogramDataPoint[float64]{}
+}
+
+func TestLifetimeMetricsRecordUnreadyCallerWithoutTargetOrRetry(t *testing.T) {
+	provider, reader := metricProvider(t)
+	policy := publicPolicy(time.Minute, 1)
+	policy.Retry = invocation.RetryPolicy{Eligibility: invocation.RetryReplaySafe, MaxAttempts: 3}
+	contract := capability.MustParseContract[string, string]("example.startup-metrics/v1")
+	endpoint, err := invocation.NewEndpoint(contract, func(context.Context, string) (string, error) {
+		t.Error("unready invocation entered target")
+		return "", nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := admissionBindingOptions(t, 1)
+	options.ModuleBuild, err = invocation.NewModuleBuild("github.com/acme/metrics", "v1.0.0", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	options.Constructor = "github.com/acme/metrics.New"
+	options.Policy = policy
+	binding, err := invocation.NewBinding(options, endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := invocation.NewCatalog([]invocation.Binding{binding})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatcher, err := invocation.NewDispatcher(invocation.DispatcherOptions{PolicyVersion: invocation.PolicySchemaVersion, MeterProvider: provider})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dispatcher.Publish(catalog); err != nil {
+		t.Fatal(err)
+	}
+	handle, err := invocation.NewHandle(dispatcher, contract, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := handle.Invoke(context.Background(), "private request")
+	assertStartupRejection(t, value, err, "runtime.dispatcher_not_ready", 0)
+	metrics := collectLifetime(t, reader)
+	assertMetric(t, metrics[callerDuration], 1, "example.startup-metrics/v1", "runtime_error", "unavailable", "not_started", false)
+	if len(metrics[targetDuration]) != 0 || dispatcher.ActiveAttempts() != 0 {
+		t.Fatal("unready call recorded a target or retained a permit")
+	}
 }
 
 func TestLifetimeMetricsIncludePreparationAndResponseProcessing(t *testing.T) {

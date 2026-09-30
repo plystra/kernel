@@ -596,6 +596,9 @@ func publicResponseRuntime[Response any](t testing.TB, timeout time.Duration, ha
 	if err := dispatcher.Publish(catalog); err != nil {
 		t.Fatal(err)
 	}
+	if err := dispatcher.OpenAdmission(); err != nil {
+		t.Fatal(err)
+	}
 	handle, err := invocation.NewHandle(dispatcher, contract, true)
 	if err != nil {
 		t.Fatal(err)

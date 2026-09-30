@@ -67,6 +67,31 @@ executed. Ordinary wrapping and joined errors remain recognizable. The returned
 semantic carrier contains only the declared code and completion classification;
 private causes, wrapper messages, and concrete implementation types are removed.
 
+### Startup admission
+
+`Dispatcher.Publish` installs the complete immutable catalog but does not accept
+invocations. Assembly must call `Dispatcher.OpenAdmission()` only after all
+selected values are ready and transports have been bound. Opening before
+publication returns `ErrDispatcherNotReady` without changing state. Opening is
+idempotent while accepting, but a drain permanently prevents both publication
+and reopening, including when shutdown began before startup finished.
+
+`Dispatcher.Accepting()` reports current admission, not a reservation against
+concurrent shutdown. `Published()` reports only catalog installation;
+`AdmissionClosed()` reports permanent shutdown closure, not startup readiness.
+Available bindings reject calls before opening with safe `unavailable`,
+`runtime.dispatcher_not_ready`, and `not_started`, without request preparation,
+target entry, response processing, retry, or permit reservation. Such published
+binding rejections record caller telemetry but no target sample. Cancellation
+and deadline checks still apply. Admission is rechecked when reserving an
+attempt so a drain during preparation cannot admit a target.
+
+This is a breaking assembly behavior change. Existing manual assembly must
+explicitly open admission when ready. The Kernel does not infer readiness from
+catalog contents or start lifecycle values itself. Generated application-wide
+startup coordination and scoped dependency access from lifecycle hooks remain
+separate integration requirements; publication alone never permits those calls.
+
 ### Completion classification
 
 `invocation.CompletionOf(err)` reads the separate closed completion vocabulary:

@@ -29,8 +29,8 @@ func (d *Dispatcher) registerAttempt(ctx context.Context, attempt *targetAttempt
 	if boundary := invocationContextError(ctx); boundary != nil {
 		return boundary
 	}
-	if d.draining {
-		return newNotStartedBoundary(ErrorUnavailable, detailDispatcherDraining)
+	if boundary := d.admissionBoundaryLocked(); boundary != nil {
+		return boundary
 	}
 	identifier := binding.endpoint.definition.Identifier()
 	if d.inflight[identifier] >= binding.policy.ConcurrencyLimit {
@@ -45,7 +45,7 @@ func (d *Dispatcher) registerAttempt(ctx context.Context, attempt *targetAttempt
 func (d *Dispatcher) enterAttempt(ctx context.Context, attempt *targetAttempt) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.draining || attempt.abandoned || invocationContextError(ctx) != nil {
+	if d.draining || !d.admissionOpen || attempt.abandoned || invocationContextError(ctx) != nil {
 		return false
 	}
 	attempt.entered = true
@@ -90,6 +90,7 @@ func (d *Dispatcher) ActiveAttempts() int {
 
 // AdmissionClosed reports whether shutdown has permanently closed admission.
 // Invalid dispatchers are closed. Published remains an independent catalog fact.
+// Before startup it returns false; use Accepting to test current admission.
 func (d *Dispatcher) AdmissionClosed() bool {
 	if !d.valid() {
 		return true

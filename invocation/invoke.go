@@ -108,6 +108,9 @@ func (h Handle[Request, Response]) invoke(ctx context.Context, request Request, 
 	if boundary := invocationContextError(callContext); boundary != nil {
 		return zero, boundary
 	}
+	if boundary := h.dispatcher.admissionBoundary(); boundary != nil {
+		return zero, boundary
+	}
 	if prepare != nil {
 		request, err = prepareRequest(request, prepare)
 		if boundary := invocationContextError(callContext); boundary != nil {

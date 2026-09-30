@@ -15,7 +15,7 @@ var (
 	// ErrCatalogPublished reports an attempt to replace the live immutable
 	// catalog.
 	ErrCatalogPublished = errors.New("capability endpoint catalog already published")
-	// ErrDispatcherNotReady reports that no complete catalog is live yet.
+	// ErrDispatcherNotReady reports an unpublished catalog or unopened admission.
 	ErrDispatcherNotReady = errors.New("capability dispatcher is not ready")
 	// ErrDispatcherDraining reports permanent admission closure during shutdown.
 	ErrDispatcherDraining = errors.New("capability dispatcher admission is closed")
@@ -37,6 +37,7 @@ type Dispatcher struct {
 	mu            sync.Mutex
 	attempts      map[*targetAttempt]struct{}
 	inflight      map[capability.Identifier]int
+	admissionOpen bool
 	draining      bool
 	drained       chan struct{}
 	closing       chan struct{}
@@ -44,7 +45,8 @@ type Dispatcher struct {
 }
 
 // NewDispatcher creates an unpublished Dispatcher for the exact compiled-policy
-// protocol. Deadlines are resolved per binding, never supplied as a fallback.
+// protocol with admission closed until OpenAdmission. Deadlines are resolved
+// per binding, never supplied as a fallback.
 func NewDispatcher(options DispatcherOptions) (*Dispatcher, error) {
 	if options.PolicyVersion != PolicySchemaVersion {
 		return nil, ErrInvalidDispatcher
@@ -65,7 +67,7 @@ func NewDispatcher(options DispatcherOptions) (*Dispatcher, error) {
 
 // Publish atomically installs one complete catalog exactly once. The catalog
 // state is copied before publication so the live snapshot has no mutable source
-// alias.
+// alias. Publication does not open admission or assert lifecycle readiness.
 func (d *Dispatcher) Publish(catalog Catalog) error {
 	if !d.valid() {
 		return ErrInvalidDispatcher
@@ -86,9 +88,57 @@ func (d *Dispatcher) Publish(catalog Catalog) error {
 }
 
 // Published reports whether one complete executable catalog was published.
-// Publication is immutable and does not imply admission remains open.
+// Publication is immutable and does not imply admission is open.
 func (d *Dispatcher) Published() bool {
 	return d.valid() && d.catalog.Load() != nil
+}
+
+// OpenAdmission permits invocation of the published catalog. Generated assembly
+// must call it only after all selected values are ready and transports are bound.
+// The dispatcher does not discover or start lifecycle values. Repeated calls are
+// idempotent until Drain permanently closes admission; they cannot reopen it.
+func (d *Dispatcher) OpenAdmission() error {
+	if !d.valid() {
+		return ErrInvalidDispatcher
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.draining {
+		return ErrDispatcherDraining
+	}
+	if d.catalog.Load() == nil {
+		return ErrDispatcherNotReady
+	}
+	d.admissionOpen = true
+	return nil
+}
+
+// Accepting reports whether admission has opened and shutdown has not begun.
+// It is an observation, not a reservation: a concurrent Drain can still reject
+// a subsequent call. Published and AdmissionClosed remain separate facts.
+func (d *Dispatcher) Accepting() bool {
+	if !d.valid() {
+		return false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.admissionOpen && !d.draining
+}
+
+func (d *Dispatcher) admissionBoundary() *Error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.admissionBoundaryLocked()
+}
+
+func (d *Dispatcher) admissionBoundaryLocked() *Error {
+	if d.draining {
+		return newNotStartedBoundary(ErrorUnavailable, detailDispatcherDraining)
+	}
+	if !d.admissionOpen {
+		return newNotStartedBoundary(ErrorUnavailable, detailDispatcherNotReady)
+	}
+	return nil
 }
 
 func (d *Dispatcher) valid() bool {

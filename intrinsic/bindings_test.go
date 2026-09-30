@@ -94,6 +94,15 @@ func TestBindingsPublishHealthAndInfoWithoutOrdinaryPlugins(t *testing.T) {
 		t.Fatalf("NewHandle(info): %v", err)
 	}
 
+	if response, err := health.Invoke(context.Background(), healthv1.Request{}); response != (healthv1.Response{}) || invocation.CompletionOf(err) != invocation.CompletionNotStarted {
+		t.Fatalf("unready health.Invoke = %#v, %v", response, err)
+	}
+	if response, err := info.Invoke(context.Background(), infov1.Request{}); response != (infov1.Response{}) || invocation.CompletionOf(err) != invocation.CompletionNotStarted {
+		t.Fatalf("unready info.Invoke = %#v, %v", response, err)
+	}
+	if err := dispatcher.OpenAdmission(); err != nil {
+		t.Fatal(err)
+	}
 	healthResponse, err := health.Invoke(context.Background(), healthv1.Request{})
 	if err != nil || healthResponse != (healthv1.Response{Status: healthv1.StatusHealthy}) {
 		t.Fatalf("health.Invoke = %#v, %v", healthResponse, err)
@@ -147,6 +156,9 @@ func TestBindingsAreSafeForConcurrentIntrinsicReads(t *testing.T) {
 	}
 	if err := dispatcher.Publish(catalogSnapshot); err != nil {
 		t.Fatalf("Publish: %v", err)
+	}
+	if err := dispatcher.OpenAdmission(); err != nil {
+		t.Fatal(err)
 	}
 	health, err := invocation.NewHandle(dispatcher, intrinsic.HealthContract(), true)
 	if err != nil {
@@ -230,6 +242,9 @@ func intrinsicInfoHandle(t testing.TB, bindings []invocation.Binding) (*invocati
 	}
 	if err := dispatcher.Publish(catalogSnapshot); err != nil {
 		t.Fatalf("Publish: %v", err)
+	}
+	if err := dispatcher.OpenAdmission(); err != nil {
+		t.Fatal(err)
 	}
 	handle, err := invocation.NewHandle(dispatcher, intrinsic.InfoContract(), true)
 	if err != nil {

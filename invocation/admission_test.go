@@ -406,6 +406,9 @@ func admissionDispatcher(t testing.TB, catalog invocation.Catalog) *invocation.D
 	if err := dispatcher.Publish(catalog); err != nil {
 		t.Fatal(err)
 	}
+	if err := dispatcher.OpenAdmission(); err != nil {
+		t.Fatal(err)
+	}
 	return dispatcher
 }
 

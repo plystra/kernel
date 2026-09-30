@@ -19,11 +19,12 @@ func (c pendingDeadlineContext) Deadline() (time.Time, bool) { return c.deadline
 
 func TestScheduledAttemptCannotEnterAfterBudgetBeforeTimerCallback(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		dispatcher := newTestDispatcher(t)
+		binding := testBinding(t, "example.budget/v1")
+		dispatcher := newAttemptDispatcher(t, binding)
 		// Model the interval after a deadline passes but before its timer runs.
 		ctx := pendingDeadlineContext{Context: context.Background(), deadline: time.Now().Add(time.Second)}
 		result := &targetResult[struct{}]{attempt: targetAttempt{cancel: func() {}}, done: make(chan struct{})}
-		if dispatcher.registerAttempt(ctx, &result.attempt, testBinding(t, "example.budget/v1")) != nil {
+		if dispatcher.registerAttempt(ctx, &result.attempt, binding) != nil {
 			t.Fatal("attempt was not registered")
 		}
 		time.Sleep(time.Second)
@@ -44,10 +45,10 @@ func TestScheduledAttemptCannotEnterAfterBudgetBeforeTimerCallback(t *testing.T)
 }
 
 func TestAbandonedScheduledAttemptCannotEnterTarget(t *testing.T) {
-	dispatcher := newTestDispatcher(t)
 	attempt := &targetAttempt{cancel: func() {}}
 	binding := testBinding(t, "example.attempt/v1")
 	binding.policy.ConcurrencyLimit = 1
+	dispatcher := newAttemptDispatcher(t, binding)
 	if dispatcher.registerAttempt(context.Background(), attempt, binding) != nil {
 		t.Fatal("attempt was not registered")
 	}
@@ -75,9 +76,10 @@ func TestAbandonedScheduledAttemptCannotEnterTarget(t *testing.T) {
 }
 
 func TestEnteredAttemptRetainsUnknownCompletionUntilTermination(t *testing.T) {
-	dispatcher := newTestDispatcher(t)
+	binding := testBinding(t, "example.attempt/v1")
+	dispatcher := newAttemptDispatcher(t, binding)
 	attempt := &targetAttempt{cancel: func() {}}
-	if dispatcher.registerAttempt(context.Background(), attempt, testBinding(t, "example.attempt/v1")) != nil {
+	if dispatcher.registerAttempt(context.Background(), attempt, binding) != nil {
 		t.Fatal("attempt was not registered")
 	}
 	if !dispatcher.enterAttempt(context.Background(), attempt) {
@@ -91,9 +93,10 @@ func TestEnteredAttemptRetainsUnknownCompletionUntilTermination(t *testing.T) {
 }
 
 func TestDrainClosureBeforeContextCancellationReturnsNotStarted(t *testing.T) {
-	dispatcher := newTestDispatcher(t)
+	binding := testBinding(t, "example.closing/v1")
+	dispatcher := newAttemptDispatcher(t, binding)
 	result := &targetResult[struct{}]{attempt: targetAttempt{cancel: func() {}}, done: make(chan struct{})}
-	if dispatcher.registerAttempt(context.Background(), &result.attempt, testBinding(t, "example.closing/v1")) != nil {
+	if dispatcher.registerAttempt(context.Background(), &result.attempt, binding) != nil {
 		t.Fatal("attempt was not registered")
 	}
 	expired, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
@@ -120,9 +123,10 @@ func TestDrainClosureBeforeContextCancellationReturnsNotStarted(t *testing.T) {
 }
 
 func TestDrainClosureBeforeContextCancellationSuppressesResponseProcessor(t *testing.T) {
-	dispatcher := newTestDispatcher(t)
+	binding := testBinding(t, "example.closing/v1")
+	dispatcher := newAttemptDispatcher(t, binding)
 	result := &targetResult[string]{attempt: targetAttempt{cancel: func() {}}, done: make(chan struct{})}
-	if dispatcher.registerAttempt(context.Background(), &result.attempt, testBinding(t, "example.closing/v1")) != nil {
+	if dispatcher.registerAttempt(context.Background(), &result.attempt, binding) != nil {
 		t.Fatal("attempt was not registered")
 	}
 	contract := capability.MustParseContract[struct{}, string]("example.closing/v1")
@@ -148,4 +152,20 @@ func TestDrainClosureBeforeContextCancellationSuppressesResponseProcessor(t *tes
 	if dispatcher.ActiveAttempts() != 0 {
 		t.Fatal("suppressed response retained its attempt")
 	}
+}
+
+func newAttemptDispatcher(t *testing.T, binding Binding) *Dispatcher {
+	t.Helper()
+	dispatcher := newTestDispatcher(t)
+	catalog, err := NewCatalog([]Binding{binding})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dispatcher.Publish(catalog); err != nil {
+		t.Fatal(err)
+	}
+	if err := dispatcher.OpenAdmission(); err != nil {
+		t.Fatal(err)
+	}
+	return dispatcher
 }

@@ -108,6 +108,9 @@ func TestHandleInvokeDispatchesIntrinsicImplementation(t *testing.T) {
 	if err := dispatcher.Publish(catalog); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
+	if err := dispatcher.OpenAdmission(); err != nil {
+		t.Fatal(err)
+	}
 	handle, root := newInvokeHandleAndContext(t, dispatcher, contract)
 	response, err := handle.Invoke(root, invokeRequest{})
 	if err != nil || response.Value != "kernel" {
@@ -158,6 +161,9 @@ func TestHandleInvokePropagatesNestedAncestry(t *testing.T) {
 	if err := dispatcher.Publish(catalog); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
+	if err := dispatcher.OpenAdmission(); err != nil {
+		t.Fatal(err)
+	}
 
 	outerHandle, err := NewHandle(dispatcher, outerContract, true)
 	if err != nil {
@@ -204,6 +210,9 @@ func TestHandleInvokeTreatsDroppedContextAsIndependentCall(t *testing.T) {
 	}
 	if err := dispatcher.Publish(catalog); err != nil {
 		t.Fatalf("Publish: %v", err)
+	}
+	if err := dispatcher.OpenAdmission(); err != nil {
+		t.Fatal(err)
 	}
 	outerHandle, root := newInvokeHandleAndContext(t, dispatcher, outerContract)
 	response, err := outerHandle.Invoke(root, invokeRequest{Value: "request"})
@@ -505,6 +514,9 @@ func TestHandleInvokeRejectsPreEntryFailuresWithoutProviderExecution(t *testing.
 	if err := empty.Publish(emptyCatalog); err != nil {
 		t.Fatalf("Publish(empty): %v", err)
 	}
+	if err := empty.OpenAdmission(); err != nil {
+		t.Fatal(err)
+	}
 	emptyHandle, emptyRoot := newInvokeHandleAndContext(t, empty, contract)
 	_, err = emptyHandle.Invoke(emptyRoot, invokeRequest{})
 	requireInvocationError(t, err, ErrorUnavailable, detailCapabilityUnavailable)
@@ -564,6 +576,9 @@ func newInvokeHarness(
 	}
 	if err := dispatcher.Publish(catalog); err != nil {
 		t.Fatalf("Publish: %v", err)
+	}
+	if err := dispatcher.OpenAdmission(); err != nil {
+		t.Fatal(err)
 	}
 	handle, err := NewHandle(dispatcher, contract, true)
 	if err != nil {
@@ -668,6 +683,9 @@ func benchmarkInvokeRuntime(b *testing.B) (Handle[invokeRequest, invokeResponse]
 	}
 	if err := dispatcher.Publish(catalog); err != nil {
 		b.Fatalf("Publish: %v", err)
+	}
+	if err := dispatcher.OpenAdmission(); err != nil {
+		b.Fatal(err)
 	}
 	handle, err := NewHandle(dispatcher, contract, true)
 	if err != nil {

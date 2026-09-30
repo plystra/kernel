@@ -149,6 +149,9 @@ func TestDrainCancelsClosesAdmissionAndRetriesBeforeDependencyCleanup(t *testing
 	if !dispatcher.AdmissionClosed() || !dispatcher.Published() || dispatcher.ActiveAttempts() != 1 || dependency.stopped.Load() {
 		t.Fatal("failed drain discarded the catalog, released the target, or stopped a dependency")
 	}
+	if err := dispatcher.OpenAdmission(); !errors.Is(err, invocation.ErrDispatcherDraining) || dispatcher.Accepting() || dispatcher.ActiveAttempts() != 1 {
+		t.Fatalf("reopening changed failed drain state: %v", err)
+	}
 	if _, err := handle.Invoke(context.Background(), nil); invocation.CompletionOf(err) != invocation.CompletionNotStarted || calls.Load() != 1 {
 		t.Fatalf("closed admission accepted work: %v", err)
 	}
