@@ -52,13 +52,20 @@ func waitRetry(ctx context.Context, dispatcher *Dispatcher, backoff time.Duratio
 	if boundary := invocationContextError(ctx); boundary != nil {
 		return boundary
 	}
+	var closing <-chan struct{} = dispatcher.closing
+	if scope := scopeFrom(ctx); scope != nil && scope.dispatcher == dispatcher {
+		closing = scope.context.Done()
+	}
 	if backoff > 0 {
 		timer := time.NewTimer(backoff)
 		defer timer.Stop()
 		select {
 		case <-ctx.Done():
 			return invocationContextError(ctx)
-		case <-dispatcher.closing:
+		case <-closing:
+			if boundary := invocationContextError(ctx); boundary != nil {
+				return boundary
+			}
 			return newNotStartedBoundary(ErrorUnavailable, detailDispatcherDraining)
 		case <-timer.C:
 		}
@@ -67,7 +74,10 @@ func waitRetry(ctx context.Context, dispatcher *Dispatcher, backoff time.Duratio
 		return boundary
 	}
 	select {
-	case <-dispatcher.closing:
+	case <-closing:
+		if boundary := invocationContextError(ctx); boundary != nil {
+			return boundary
+		}
 		return newNotStartedBoundary(ErrorUnavailable, detailDispatcherDraining)
 	default:
 		return nil

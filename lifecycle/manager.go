@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/plystra/kernel/invocation"
 )
 
 var (
@@ -53,9 +55,13 @@ func (s State) Valid() bool {
 	}
 }
 
-// ManagerOptions configures bounded cleanup after a failed startup.
+// ManagerOptions configures bounded rollback and governed hook dependencies.
 type ManagerOptions struct {
 	RollbackTimeout time.Duration
+	// Dispatcher binds governed dependency calls to the supplied lifecycle
+	// order before catalog publication. Nil is for lifecycles without governed
+	// invocation. When set, Start and Stop require deadline-bound contexts.
+	Dispatcher *invocation.Dispatcher
 }
 
 // Manager owns cleanup of every supplied constructed lifecycle instance,
@@ -67,6 +73,7 @@ type Manager struct {
 	pendingStop     []bool
 	state           State
 	rollbackTimeout time.Duration
+	invocations     *invocation.Lifecycle
 }
 
 // NewManager validates and defensively copies an already-resolved lifecycle
@@ -90,11 +97,24 @@ func NewManager(options ManagerOptions, bindings []Binding) (*Manager, error) {
 		ordered[index] = binding
 		pendingStop[index] = true
 	}
+	var invocations *invocation.Lifecycle
+	if options.Dispatcher != nil {
+		constructors := make([]string, len(ordered))
+		for index, binding := range ordered {
+			constructors[index] = binding.constructor
+		}
+		var err error
+		invocations, err = options.Dispatcher.BindLifecycle(constructors)
+		if err != nil {
+			return nil, errors.Join(ErrInvalidManager, err)
+		}
+	}
 	return &Manager{
 		bindings:        ordered,
 		pendingStop:     pendingStop,
 		state:           StateNew,
 		rollbackTimeout: options.RollbackTimeout,
+		invocations:     invocations,
 	}, nil
 }
 
@@ -118,6 +138,9 @@ func (m *Manager) Start(ctx context.Context) error {
 	if ctx == nil {
 		return ErrInvalidContext
 	}
+	if _, bounded := ctx.Deadline(); m.invocations != nil && !bounded {
+		return ErrInvalidContext
+	}
 	if err := m.transition(StateNew, StateStarting); err != nil {
 		return err
 	}
@@ -133,7 +156,12 @@ func (m *Manager) Start(ctx context.Context) error {
 			m.setState(StateFailed)
 			return errors.Join(operationFailure(ErrStart, "", err), rollback)
 		}
-		err := invokeHook(ctx, binding.instance.Start)
+		var err error
+		if m.invocations == nil {
+			err = invokeHook(ctx, binding.instance.Start)
+		} else {
+			err = m.invocations.Start(ctx, binding.constructor, binding.instance.Start)
+		}
 		if contextErr := ctx.Err(); contextErr != nil {
 			err = contextErr
 		}
@@ -157,6 +185,9 @@ func (m *Manager) Stop(ctx context.Context) error {
 		return ErrInvalidManager
 	}
 	if ctx == nil {
+		return ErrInvalidContext
+	}
+	if _, bounded := ctx.Deadline(); m.invocations != nil && !bounded {
 		return ErrInvalidContext
 	}
 
@@ -208,12 +239,30 @@ func (m *Manager) rollback(parent context.Context) error {
 func (m *Manager) stopPending(ctx context.Context) error {
 	failed := make([]string, 0)
 	var cause error
+	if m.invocations != nil && len(m.bindings) == 0 {
+		if err := m.invocations.Drain(ctx); err != nil {
+			return errors.Join(operationFailure(ErrStop, "invocation drain", ctx.Err()), err)
+		}
+	}
 	for index := len(m.bindings) - 1; index >= 0; index-- {
 		if !m.pendingStop[index] {
 			continue
 		}
 		binding := m.bindings[index]
-		if err := invokeHook(ctx, binding.instance.Stop); err != nil {
+		var err error
+		if m.invocations == nil {
+			err = invokeHook(ctx, binding.instance.Stop)
+		} else {
+			if drainErr := m.invocations.Drain(ctx); drainErr != nil {
+				var prior error
+				if len(failed) != 0 {
+					prior = operationFailure(ErrStop, "constructors "+strings.Join(failed, ", "), cause)
+				}
+				return errors.Join(prior, operationFailure(ErrStop, "invocation drain", ctx.Err()), drainErr)
+			}
+			err = m.invocations.Stop(ctx, binding.constructor, binding.instance.Stop)
+		}
+		if err != nil {
 			failed = append(failed, binding.constructor)
 			if contextError(err) != nil {
 				cause = contextError(err)

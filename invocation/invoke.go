@@ -11,6 +11,7 @@ const (
 	detailInvalidHandle             = "runtime.invalid_handle"
 	detailContextRequired           = "runtime.context_required"
 	detailDispatcherNotReady        = "runtime.dispatcher_not_ready"
+	detailLifecycleNotReady         = "runtime.lifecycle_not_ready"
 	detailCapabilityUnavailable     = "runtime.capability_unavailable"
 	detailInvocationIDFailed        = "runtime.invocation_id_failed"
 	detailDeadlineExceeded          = "runtime.deadline_exceeded"
@@ -108,7 +109,7 @@ func (h Handle[Request, Response]) invoke(ctx context.Context, request Request, 
 	if boundary := invocationContextError(callContext); boundary != nil {
 		return zero, boundary
 	}
-	if boundary := h.dispatcher.admissionBoundary(); boundary != nil {
+	if boundary := h.dispatcher.admissionBoundary(callContext, binding); boundary != nil {
 		return zero, boundary
 	}
 	if prepare != nil {
@@ -219,7 +220,11 @@ func executeAttempt[Request, Response any](ctx context.Context, dispatcher *Disp
 	if !dispatcher.enterAttempt(ctx, attempt) {
 		boundary := invocationContextError(ctx)
 		if boundary == nil {
-			boundary = newNotStartedBoundary(ErrorUnavailable, detailDispatcherDraining)
+			detail := detailDispatcherDraining
+			if attempt.scope != nil {
+				detail = detailLifecycleNotReady
+			}
+			boundary = newNotStartedBoundary(ErrorUnavailable, detail)
 		}
 		err = boundary
 		returned = true
@@ -232,7 +237,7 @@ func executeAttempt[Request, Response any](ctx context.Context, dispatcher *Disp
 	} else if process != nil {
 		boundary := invocationContextError(ctx)
 		dispatcher.mu.Lock()
-		abandoned := attempt.abandoned || dispatcher.draining
+		abandoned := attempt.abandoned || !dispatcher.attemptAllowedLocked(attempt)
 		dispatcher.mu.Unlock()
 		if boundary != nil || abandoned {
 			if boundary == nil {
@@ -266,6 +271,11 @@ func invocationContextError(ctx context.Context) *Error {
 	}
 	if boundary := boundaryForContextError(ctx.Err()); boundary != nil {
 		return boundary
+	}
+	if scope := scopeFrom(ctx); scope != nil {
+		if boundary := boundaryForContextError(scope.context.Err()); boundary != nil {
+			return boundary
+		}
 	}
 	// Bounded synchronous preparation can use the entire budget before the
 	// context timer's callback is scheduled. Never admit work in that gap.

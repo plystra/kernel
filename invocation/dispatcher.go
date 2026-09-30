@@ -1,6 +1,7 @@
 package invocation
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -39,9 +40,12 @@ type Dispatcher struct {
 	inflight      map[capability.Identifier]int
 	admissionOpen bool
 	draining      bool
-	drained       chan struct{}
+	idle          chan struct{}
+	idleClosed    bool
 	closing       chan struct{}
 	metrics       invocationMetrics
+	lifecycle     *Lifecycle
+	scope         *hookScope
 }
 
 // NewDispatcher creates an unpublished Dispatcher for the exact compiled-policy
@@ -55,11 +59,14 @@ func NewDispatcher(options DispatcherOptions) (*Dispatcher, error) {
 	if err != nil {
 		return nil, err
 	}
+	idle := make(chan struct{})
+	close(idle)
 	return &Dispatcher{
 		policyVersion: options.PolicyVersion,
 		attempts:      make(map[*targetAttempt]struct{}),
 		inflight:      make(map[capability.Identifier]int),
-		drained:       make(chan struct{}),
+		idle:          idle,
+		idleClosed:    true,
 		closing:       make(chan struct{}),
 		metrics:       metrics,
 	}, nil
@@ -106,7 +113,7 @@ func (d *Dispatcher) OpenAdmission() error {
 	if d.draining {
 		return ErrDispatcherDraining
 	}
-	if d.catalog.Load() == nil {
+	if d.catalog.Load() == nil || d.scope != nil || d.lifecycle != nil && (d.lifecycle.stopping || d.lifecycle.next != len(d.lifecycle.order)) {
 		return ErrDispatcherNotReady
 	}
 	d.admissionOpen = true
@@ -125,13 +132,22 @@ func (d *Dispatcher) Accepting() bool {
 	return d.admissionOpen && !d.draining
 }
 
-func (d *Dispatcher) admissionBoundary() *Error {
+func (d *Dispatcher) admissionBoundary(ctx context.Context, binding Binding) *Error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.admissionBoundaryLocked()
+	return d.admissionBoundaryLocked(ctx, binding)
 }
 
-func (d *Dispatcher) admissionBoundaryLocked() *Error {
+func (d *Dispatcher) admissionBoundaryLocked(ctx context.Context, binding Binding) *Error {
+	if scope := scopeFrom(ctx); scope != nil && scope.dispatcher == d {
+		if d.scope != scope || !scope.active {
+			return newNotStartedBoundary(ErrorUnavailable, detailLifecycleNotReady)
+		}
+		if ready, managed := d.lifecycle.ready[binding.constructor]; managed && !ready {
+			return newNotStartedBoundary(ErrorUnavailable, detailLifecycleNotReady)
+		}
+		return nil
+	}
 	if d.draining {
 		return newNotStartedBoundary(ErrorUnavailable, detailDispatcherDraining)
 	}

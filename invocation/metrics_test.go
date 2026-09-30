@@ -17,6 +17,7 @@ import (
 
 	"github.com/plystra/kernel/capability"
 	"github.com/plystra/kernel/invocation"
+	"github.com/plystra/kernel/lifecycle"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
@@ -179,6 +180,66 @@ func TestLifetimeMetricsRecordUnreadyCallerWithoutTargetOrRetry(t *testing.T) {
 	if len(metrics[targetDuration]) != 0 || dispatcher.ActiveAttempts() != 0 {
 		t.Fatal("unready call recorded a target or retained a permit")
 	}
+}
+
+func TestLifetimeMetricsIncludeGovernedLifecycleHooks(t *testing.T) {
+	provider, reader := metricProvider(t)
+	contract := capability.MustParseContract[string, string]("example.hook-metrics/v1")
+	endpoint, err := invocation.NewEndpoint(contract, func(_ context.Context, value string) (string, error) { return value, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := admissionBindingOptions(t, 1)
+	options.ModuleBuild, err = invocation.NewModuleBuild("github.com/acme/metrics", "v1.0.0", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	options.Constructor = "github.com/acme/metrics.New"
+	binding, err := invocation.NewBinding(options, endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := invocation.NewCatalog([]invocation.Binding{binding})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatcher, err := invocation.NewDispatcher(invocation.DispatcherOptions{PolicyVersion: invocation.PolicySchemaVersion, MeterProvider: provider})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := invocation.NewHandle(dispatcher, contract, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hook := func(ctx context.Context) error {
+		value, err := handle.InvokeWithPreparation(ctx, "private hook request", func(value string) (string, error) { return value, nil }, func(value string) (string, error) { return value, nil })
+		if err != nil || value != "private hook request" {
+			t.Errorf("hook invocation = %q, %v", value, err)
+		}
+		return err
+	}
+	member, err := lifecycle.NewBinding("github.com/acme/metrics.NewConsumer", startupInstance{start: hook, stop: hook})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := lifecycle.NewManager(lifecycle.ManagerOptions{Dispatcher: dispatcher, RollbackTimeout: time.Second}, []lifecycle.Binding{member})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dispatcher.Publish(catalog); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := manager.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	metrics := collectLifetime(t, reader)
+	assertMetric(t, metrics[callerDuration], 2, "example.hook-metrics/v1", "success", "", "result_known", false)
+	assertMetric(t, metrics[targetDuration], 2, "example.hook-metrics/v1", "success", "", "result_known", false)
 }
 
 func TestLifetimeMetricsIncludePreparationAndResponseProcessing(t *testing.T) {

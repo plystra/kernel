@@ -151,6 +151,12 @@ func enterInvocationContext(parent context.Context, invocationID InvocationID, t
 	if !inheritedDeadline.IsZero() && (deadline.IsZero() || inheritedDeadline.Before(deadline)) {
 		deadline = inheritedDeadline
 	}
+	scope := scopeFrom(parent)
+	if scope != nil {
+		if hookDeadline, bounded := scope.context.Deadline(); bounded && (deadline.IsZero() || hookDeadline.Before(deadline)) {
+			deadline = hookDeadline
+		}
+	}
 	next := runtimeFrame{
 		requestID:    requestID,
 		traceID:      traceID,
@@ -173,6 +179,13 @@ func enterInvocationContext(parent context.Context, invocationID InvocationID, t
 		callContext, cancel = context.WithDeadline(parent, deadline)
 	}
 	stopAuthority := context.AfterFunc(authority, cancel)
+	var stopHook func() bool
+	if scope != nil {
+		stopHook = context.AfterFunc(scope.context, cancel)
+		if scope.context.Err() != nil {
+			cancel()
+		}
+	}
 	if authority.Err() != nil {
 		cancel()
 	}
@@ -181,6 +194,9 @@ func enterInvocationContext(parent context.Context, invocationID InvocationID, t
 	cleanup := func() {
 		cleanupOnce.Do(func() {
 			stopAuthority()
+			if stopHook != nil {
+				stopHook()
+			}
 			cancel()
 		})
 	}

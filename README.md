@@ -89,8 +89,10 @@ attempt so a drain during preparation cannot admit a target.
 This is a breaking assembly behavior change. Existing manual assembly must
 explicitly open admission when ready. The Kernel does not infer readiness from
 catalog contents or start lifecycle values itself. Generated application-wide
-startup coordination and scoped dependency access from lifecycle hooks remain
-separate integration requirements; publication alone never permits those calls.
+startup coordination and lifecycle-manager wiring remain separate consumer
+integration requirements; publication alone never permits hook calls. A bound
+lifecycle order also prevents opening before every Start succeeds or while a
+hook still owns target work.
 
 ### Completion classification
 
@@ -135,8 +137,9 @@ redacted internal failure rather than a zero-value success.
 `Dispatcher.ActiveAttempts()` counts registered adapter executions, including
 scheduled work and targets whose callers already completed.
 `Dispatcher.Drain(ctx)` requires a non-nil context with a deadline, permanently
-closes admission, cancels active target contexts, and waits for actual
-termination. Invalid contexts leave admission unchanged. An expired or
+closes public admission, cancels active hook and target contexts, and waits for
+actual hook-body and target termination. Invalid contexts leave admission
+unchanged. An expired or
 cancelled drain reports `ErrDrain` with only the standard context cause; a
 fresh bounded call can resume the same drain. Concurrent callers have
 independent wait deadlines. `AdmissionClosed()` reports permanent closure;
@@ -258,6 +261,37 @@ queue, circuit, and authored generated concurrency acceptance remain incomplete.
 Implementations that own resources requiring explicit startup and shutdown implement `lifecycle.Instance`. Constructors only assemble values and store configuration and dependencies; resource acquisition and background work belong in `Start`. Generated assembly supplies constructed lifecycle values in dependency order through `lifecycle.NewBinding` and `lifecycle.NewManager`; the Kernel does not discover Implementations or recompute dependencies. Values without lifecycle work need no lifecycle methods.
 
 The lifecycle manager owns cleanup of every supplied constructed value from creation, including before `Start`. It starts values in generated order and stops them in reverse order. Startup cancellation, error, or panic performs bounded rollback of all constructed values, including the failing value and values whose `Start` was never entered. Rollback preserves context values but uses a fresh timeout independent of startup cancellation. `Stop` must tolerate never-started and partially started values. Cleanup attempts every pending value, skips successful stops on later calls, and leaves failed stops retryable with a fresh context. A `Stop` hook returning nil confirms cleanup even if cancellation arrived during that hook; later hooks remain pending when cancellation prevents entry. Errors and panics expose only safe constructor symbols and standard context cancellation or deadline causes, never Implementation error text.
+
+When those values use governed Interfaces, assembly supplies
+`ManagerOptions.Dispatcher` before publishing the catalog. The manager binds
+its complete constructor order using `Dispatcher.BindLifecycle`; duplicate,
+invalid, repeated, and post-publication lifecycle assembly is rejected. Nil is
+for a manager without governed invocation. A dispatcher owns one lifecycle
+order; neither API discovers constructors or dependency edges. All Interface
+bindings selecting a managed constructor share its readiness. Bindings without
+lifecycle work, including intrinsics, are ready after construction.
+
+An invocation-aware manager requires deadline-bound Start and Stop contexts.
+Each hook receives a private, short-lived context scope. Within that scope,
+ready dependencies are callable while public admission remains closed.
+Unstarted, failing, and already-stopping values return `unavailable` with
+`runtime.lifecycle_not_ready` and `not_started`. Hook calls retain ordinary
+invocation ancestry, policies, permits, response processing, and telemetry,
+including retry during Stop. A scope cannot grant access to another dispatcher.
+Returning from a hook revokes its scope and cancels outstanding work; retaining
+the context or using `context.WithoutCancel` cannot extend its deadline or
+lifetime. Hooks must make dependency calls synchronously within that context.
+
+The manager drains before each pending Stop, including startup rollback. It
+will not enter dependency cleanup while a hook body, target, or response
+processor remains live. A failed bounded wait preserves pending values for a
+fresh Stop retry and exposes safe lifecycle and drain errors. Cleanup hooks may
+then call still-ready dependencies without reopening public admission; every
+such hook has its own tracked lifetime. A successful Stop is retained after
+cancellation only once all of its target work has terminated. Assembly still
+owns application-wide coordination across dispatchers and transport readiness,
+and must call OpenAdmission explicitly after complete successful startup.
+Generated consumer integration is not established by these Kernel APIs.
 
 ## Context and configuration
 
