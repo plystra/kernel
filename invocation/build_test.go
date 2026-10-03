@@ -22,6 +22,7 @@ func TestModuleBuildAcceptsCanonicalVersionOrBuildIdentity(t *testing.T) {
 		{name: "gopkg path", path: "gopkg.in/yaml.v3", version: "v3.0.4"},
 		{name: "pseudo version", path: "example.com/acme/provider", version: "v0.0.0-20260102030405-abcdefabcdef"},
 		{name: "local build", path: "example.com/acme/provider", identity: "sha256:0123456789abcdef"},
+		{name: "short local project", path: "my-app", identity: "sha256:0123456789abcdef"},
 		{name: "maximum build identity", path: "example.com/acme/provider", identity: strings.Repeat("a", invocation.MaximumBuildIdentitySize)},
 	} {
 		build, err := invocation.NewModuleBuild(test.path, test.version, test.identity)
@@ -48,6 +49,13 @@ func TestModuleBuildRejectsUnsafeOrContradictoryMetadata(t *testing.T) {
 	}{
 		{name: "missing path", version: "v1.0.0"},
 		{name: "invalid path", path: "../provider", version: "v1.0.0"},
+		{name: "short versioned project", path: "my-app", version: "v1.0.0", identity: "sha256:0123456789abcdef"},
+		{name: "short project without build identity", path: "my-app"},
+		{name: "nested local project", path: "local/app", identity: "sha256:0123456789abcdef"},
+		{name: "relative local project", path: "../app", identity: "sha256:0123456789abcdef"},
+		{name: "local reserved name", path: "NUL", identity: "sha256:0123456789abcdef"},
+		{name: "local version query", path: "my-app@v1.0.0", identity: "sha256:0123456789abcdef"},
+		{name: "local invalid build identity", path: "my-app", identity: "git/revision"},
 		{name: "uppercase domain", path: "GitHub.com/acme/provider", version: "v1.0.0"},
 		{name: "v1 path suffix", path: "example.com/acme/provider/v1", version: "v1.0.0"},
 		{name: "oversized path", path: "example.com/" + strings.Repeat("a", invocation.MaximumModulePathSize), version: "v1.0.0"},
@@ -88,6 +96,7 @@ func TestZeroModuleBuildFailsClosed(t *testing.T) {
 func FuzzModuleBuild(f *testing.F) {
 	f.Add("github.com/acme/email", "v1.4.2", "")
 	f.Add("example.com/acme/provider", "", "sha256:0123456789abcdef")
+	f.Add("my-app", "", "sha256:0123456789abcdef")
 	f.Add("../provider", "v1.0.0", "")
 	f.Fuzz(func(t *testing.T, path, version, identity string) {
 		build, err := invocation.NewModuleBuild(path, version, identity)

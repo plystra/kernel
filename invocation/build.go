@@ -2,6 +2,7 @@ package invocation
 
 import (
 	"errors"
+	"strings"
 
 	"golang.org/x/mod/module"
 )
@@ -32,6 +33,7 @@ type ModuleBuild struct {
 // NewModuleBuild validates a canonical Go module path and either its canonical
 // module version, a safe build identity, or both. Local and development modules
 // without a version must provide an independently generated build identity.
+// An unversioned local Project may use a single-component Go import path.
 func NewModuleBuild(modulePath, moduleVersion, buildIdentity string) (ModuleBuild, error) {
 	build := ModuleBuild{
 		modulePath:    modulePath,
@@ -75,7 +77,10 @@ func (b ModuleBuild) Valid() bool {
 }
 
 func validModuleBuild(b ModuleBuild) bool {
-	if len(b.modulePath) == 0 || len(b.modulePath) > MaximumModulePathSize || module.CheckPath(b.modulePath) != nil {
+	if len(b.modulePath) == 0 || len(b.modulePath) > MaximumModulePathSize {
+		return false
+	}
+	if module.CheckPath(b.modulePath) != nil && (b.moduleVersion != "" || strings.Contains(b.modulePath, "/") || module.CheckImportPath(b.modulePath) != nil) {
 		return false
 	}
 	if b.moduleVersion == "" && b.buildIdentity == "" {

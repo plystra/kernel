@@ -51,6 +51,12 @@ The Kernel receives one complete immutable registry. It distinguishes exact Capa
 
 Go plugins share one process and are not sandboxed. Generated Capability clients are the supported application API; raw dispatch remains a low-level Kernel boundary rather than an encouraged bypass for ordinary plugin code.
 
+`invocation.NewModuleBuild` preserves exact owning-module provenance. An
+unversioned local Project may use a single-component identity such as `my-app`,
+with a mandatory safe build identity. Versioned dependencies still require
+standard Go Module paths and canonical versions. Short names do not alias
+dependencies, and a selected constructor must remain inside its owning module.
+
 Typed contracts declare their exact semantic error codes. Implementations return
 `invocation.NewSemanticError(code, cause)`, directly or through ordinary `%w`
 wrapping. `Code()` exposes the code and `Unwrap()` retains the optional cause

@@ -123,6 +123,40 @@ func TestCatalogSupportsIntrinsicBindingWithoutConstructor(t *testing.T) {
 	}
 }
 
+func TestCatalogKeepsShortLocalModuleOwnershipExact(t *testing.T) {
+	t.Parallel()
+	contract := capability.MustParseContract[endpointRequest, endpointResponse]("example.operation/v1")
+	endpoint, err := NewEndpoint(contract, successfulEndpointHandler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	build := mustModuleBuild(t, "my-app", "", "sha256:0123456789abcdef")
+	for _, symbol := range []string{"my-app.New", "my-app/provider.New", "my-app-other/provider.New", "another-app/provider.New"} {
+		binding, err := NewBinding(BindingOptions{
+			Policy: testPolicy(time.Second, 64), Kind: BindingKindImplementation,
+			Constructor: symbol, ModuleBuild: build, SelectionReason: SelectionReasonExplicit,
+			ContractDigest: sha256.Sum256([]byte("example.operation/v1 schema")),
+		}, endpoint)
+		if symbol == "my-app-other/provider.New" || symbol == "another-app/provider.New" {
+			if !errors.Is(err, ErrInvalidBinding) {
+				t.Fatalf("outside-module constructor %s = %v", symbol, err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		catalog, err := NewCatalog([]Binding{binding})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, ok := catalog.Lookup(contract.Identifier())
+		if !ok || got.ModuleBuild() != build || got.Constructor() != symbol {
+			t.Fatal("catalog changed local module ownership")
+		}
+	}
+}
+
 func TestNewBindingRejectsInvalidMetadata(t *testing.T) {
 	t.Parallel()
 
