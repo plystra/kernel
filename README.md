@@ -10,6 +10,12 @@ Kernel + CLI
 
 The Kernel is intrinsically complete. It does not depend on the CLI at runtime and never consumes an ordinary plugin Capability or service to implement a Kernel function.
 
+## License
+
+Plystra Kernel is licensed under the [Apache License, Version 2.0](LICENSE).
+
+Applications and plugins using the Kernel may use their own licenses, including proprietary terms, while meeting the applicable Apache-2.0 requirements. Third-party dependencies and material retain their own licenses.
+
 ## Runtime responsibilities
 
 The Kernel owns:
