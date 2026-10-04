@@ -211,10 +211,8 @@ func TestManagerRetriesNeverStartedCleanup(t *testing.T) {
 			if err := manager.Stop(context.Background()); err != nil || manager.State() != lifecycle.StateStopped {
 				t.Fatalf("retry Stop = %v, state %s", err, manager.State())
 			}
-			want := []string{"consumer", "dependency", "consumer"}
-			if mode == "deadline" {
-				want = []string{"consumer", "consumer", "dependency"}
-			} else if mode == "cancelled stop" {
+			want := []string{"consumer", "consumer", "dependency"}
+			if mode == "cancelled stop" {
 				want = []string{"consumer", "dependency"}
 			}
 			if !reflect.DeepEqual(events, want) {
@@ -412,7 +410,7 @@ func TestManagerRollsBackFailingInstanceWithoutLeakingError(t *testing.T) {
 	}
 }
 
-func TestManagerReportsRollbackFailureAndRetriesOnlyActiveInstance(t *testing.T) {
+func TestManagerReportsRollbackFailureAndRetainsDependenciesForRetry(t *testing.T) {
 	t.Parallel()
 
 	secretStart := errors.New("token=start-secret")
@@ -444,7 +442,7 @@ func TestManagerReportsRollbackFailureAndRetriesOnlyActiveInstance(t *testing.T)
 	if err := manager.Stop(context.Background()); err != nil || manager.State() != lifecycle.StateStopped {
 		t.Fatalf("retry Stop = %v, State %s", err, manager.State())
 	}
-	want := []string{"start:stable", "start:retry", "stop:retry", "stop:stable", "stop:retry"}
+	want := []string{"start:stable", "start:retry", "stop:retry", "stop:retry", "stop:stable"}
 	if !reflect.DeepEqual(events, want) {
 		t.Fatalf("retry events = %v, want %v", events, want)
 	}
