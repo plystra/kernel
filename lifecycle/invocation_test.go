@@ -350,6 +350,81 @@ func TestGovernedStopHooksRetainRetryPolicyAfterPublicDrain(t *testing.T) {
 	}
 }
 
+func TestGovernedCleanupRetryKeepsDependenciesReady(t *testing.T) {
+	for _, phase := range []string{"shutdown", "rollback"} {
+		t.Run(phase, func(t *testing.T) {
+			var fixture governedFixture
+			var live atomic.Bool
+			var calls atomic.Int32
+			var events []string
+			attempts := 0
+			fixture = newGovernedFixture(t, []governedMember{
+				{name: "Resource", resourceName: "database.primary", constructor: resourceProvider, instance: &testLifecycleInstance{
+					start: func(context.Context) error { live.Store(true); return nil },
+					stop:  func(context.Context) error { events = append(events, "resource"); live.Store(false); return nil },
+				}},
+				{name: "Dependency", instance: &testLifecycleInstance{
+					stop: func(context.Context) error { events = append(events, "dependency"); return nil },
+				}, handler: func(_ context.Context, value string) (string, error) {
+					calls.Add(1)
+					if !live.Load() {
+						return "", errors.New("Resource dependency already stopped")
+					}
+					return value, nil
+				}},
+				{name: "Consumer", instance: &testLifecycleInstance{
+					start: func(context.Context) error {
+						if phase == "rollback" {
+							return errors.New("private startup failure")
+						}
+						return nil
+					},
+					stop: func(ctx context.Context) error {
+						events = append(events, "consumer")
+						attempts++
+						assertGovernedCall(t, fixture, ctx, "Dependency")
+						assertGovernedUnavailable(t, fixture, ctx, "Consumer")
+						assertGovernedUnavailable(t, fixture, ctx, "Completed")
+						if attempts == 1 {
+							return errors.New("private cleanup failure")
+						}
+						return nil
+					},
+				}},
+				{name: "Completed", instance: &testLifecycleInstance{
+					stop: func(context.Context) error { events = append(events, "completed"); return nil },
+				}},
+			})
+			err := fixture.manager.Start(governedContext(t))
+			if phase == "shutdown" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := fixture.dispatcher.OpenAdmission(); err != nil {
+					t.Fatal(err)
+				}
+				err = fixture.manager.Stop(governedContext(t))
+			} else if !errors.Is(err, lifecycle.ErrStart) {
+				t.Fatalf("startup rollback = %v", err)
+			}
+			if !errors.Is(err, lifecycle.ErrStop) || strings.Contains(err.Error(), "private") || !live.Load() || !reflect.DeepEqual(events, []string{"completed", "consumer"}) {
+				t.Fatalf("cleanup did not retain dependencies: %v, stops %v", err, events)
+			}
+			assertGovernedUnavailable(t, fixture, governedContext(t), "Dependency")
+			if err := fixture.manager.Stop(governedContext(t)); err != nil || live.Load() || calls.Load() != 2 || fixture.manager.State() != lifecycle.StateStopped {
+				t.Fatalf("retry = %v, Resource live %t, calls %d, state %s", err, live.Load(), calls.Load(), fixture.manager.State())
+			}
+			want := []string{"completed", "consumer", "consumer", "dependency", "resource"}
+			if err := fixture.manager.Stop(governedContext(t)); err != nil || !reflect.DeepEqual(events, want) {
+				t.Fatalf("cleanup order or successful-stop retention = %v, stops %v", err, events)
+			}
+			if err := fixture.dispatcher.OpenAdmission(); !errors.Is(err, invocation.ErrDispatcherDraining) {
+				t.Fatalf("cleanup reopened public admission: %v", err)
+			}
+		})
+	}
+}
+
 func TestGovernedReadinessFollowsConstructorAcrossBindings(t *testing.T) {
 	var fixture governedFixture
 	fixture = newGovernedFixture(t, []governedMember{

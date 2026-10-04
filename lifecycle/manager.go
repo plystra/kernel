@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -176,9 +175,10 @@ func (m *Manager) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop invokes every constructed instance still requiring cleanup in reverse
-// generated order, including before Start. Successful instances are not called
-// again; failed stops may be retried by calling Stop with a fresh context.
+// Stop invokes constructed instances still requiring cleanup in reverse
+// generated order, including before Start. Cleanup stops at the first failure,
+// retaining all earlier bindings so dependencies remain live for a fresh Stop
+// retry. Successfully stopped instances are not called again.
 // A hook returning nil confirms cleanup even if its context was cancelled
 // during execution; cancellation still prevents entering remaining hooks.
 func (m *Manager) Stop(ctx context.Context) error {
@@ -238,8 +238,6 @@ func (m *Manager) rollback(parent context.Context) error {
 }
 
 func (m *Manager) stopPending(ctx context.Context) error {
-	failed := make([]string, 0)
-	var cause error
 	if m.invocations != nil && len(m.bindings) == 0 {
 		if err := m.invocations.Drain(ctx); err != nil {
 			return errors.Join(operationFailure(ErrStop, "invocation drain", ctx.Err()), err)
@@ -255,27 +253,18 @@ func (m *Manager) stopPending(ctx context.Context) error {
 			err = invokeHook(ctx, binding.instance.Stop)
 		} else {
 			if drainErr := m.invocations.Drain(ctx); drainErr != nil {
-				var prior error
-				if len(failed) != 0 {
-					prior = operationFailure(ErrStop, strings.Join(failed, ", "), cause)
-				}
-				return errors.Join(prior, operationFailure(ErrStop, "invocation drain", ctx.Err()), drainErr)
+				return errors.Join(operationFailure(ErrStop, "invocation drain", ctx.Err()), drainErr)
 			}
 			err = m.invocations.Stop(ctx, binding.owner, binding.instance.Stop)
 		}
 		if err != nil {
-			failed = append(failed, binding.description())
-			if contextError(err) != nil {
-				cause = contextError(err)
-			}
-			continue
+			// Only the order is known, so any earlier binding may be a
+			// dependency needed by this instance's next cleanup attempt.
+			return operationFailure(ErrStop, binding.description(), err)
 		}
 		m.pendingStop[index] = false
 	}
-	if len(failed) == 0 {
-		return nil
-	}
-	return operationFailure(ErrStop, strings.Join(failed, ", "), cause)
+	return nil
 }
 
 func invokeHook(ctx context.Context, hook func(context.Context) error) (err error) {

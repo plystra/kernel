@@ -222,10 +222,8 @@ func TestResourceCleanupRetryRetainsSuccessfulInstances(t *testing.T) {
 					if err := manager.Stop(governedContext(t)); err != nil {
 						t.Fatal(err)
 					}
-					want := []string{"replica", "primary", "replica"}
-					if mode == "deadline" {
-						want = []string{"replica", "replica", "primary"}
-					} else if strings.HasPrefix(mode, "cancelled") {
+					want := []string{"replica", "replica", "primary"}
+					if strings.HasPrefix(mode, "cancelled") {
 						want = []string{"replica", "primary"}
 					}
 					if !reflect.DeepEqual(events, want) {
@@ -233,6 +231,95 @@ func TestResourceCleanupRetryRetainsSuccessfulInstances(t *testing.T) {
 					}
 				})
 			})
+		}
+	}
+}
+
+func TestCleanupRetryKeepsResourceDependencyLive(t *testing.T) {
+	for _, governed := range []bool{false, true} {
+		for _, phase := range []string{"shutdown", "rollback"} {
+			for _, owner := range []string{"resource", "implementation"} {
+				for _, outcome := range []string{"error", "panic"} {
+					t.Run(fmt.Sprintf("%t/%s/%s/%s", governed, phase, owner, outcome), func(t *testing.T) {
+						var events []string
+						var live bool
+						attempts := 0
+						private := errors.New("private cleanup failure")
+						consumer := &testLifecycleInstance{
+							start: func(context.Context) error {
+								if phase == "rollback" {
+									return private
+								}
+								return nil
+							},
+							stop: func(context.Context) error {
+								events = append(events, "consumer")
+								attempts++
+								if !live {
+									return errors.New("dependency already stopped")
+								}
+								if attempts == 1 {
+									if outcome == "panic" {
+										panic(private)
+									}
+									return private
+								}
+								return nil
+							},
+						}
+						consumerBinding := lifecycleBinding(t, "example.com/lease.New", consumer)
+						if owner == "resource" {
+							consumerBinding = resourceBinding(t, "lease", "example.com/lease.New", consumer)
+						}
+						manager, dispatcher := resourceManager(t, governed, []lifecycle.Binding{
+							resourceBinding(t, "database.primary", resourceProvider, &testLifecycleInstance{
+								start: func(context.Context) error { live = true; return nil },
+								stop:  func(context.Context) error { events = append(events, "dependency"); live = false; return nil },
+							}),
+							consumerBinding,
+							lifecycleBinding(t, "example.com/completed.New", &testLifecycleInstance{
+								start: func(context.Context) error {
+									if phase == "rollback" {
+										t.Error("later instance started after failure")
+									}
+									return nil
+								},
+								stop: func(context.Context) error { events = append(events, "completed"); return nil },
+							}),
+						})
+						err := manager.Start(governedContext(t))
+						if phase == "shutdown" {
+							if err != nil {
+								t.Fatal(err)
+							}
+							if dispatcher != nil {
+								if err := dispatcher.OpenAdmission(); err != nil {
+									t.Fatal(err)
+								}
+							}
+							err = manager.Stop(governedContext(t))
+						} else if !errors.Is(err, lifecycle.ErrStart) {
+							t.Fatalf("startup rollback = %v", err)
+						}
+						if !errors.Is(err, lifecycle.ErrStop) || errors.Is(err, private) || strings.Contains(fmt.Sprint(err), "private") || manager.State() != lifecycle.StateFailed {
+							t.Fatalf("initial cleanup = %v, state %s", err, manager.State())
+						}
+						if !live || !reflect.DeepEqual(events, []string{"completed", "consumer"}) {
+							t.Fatalf("failed consumer lost live dependency: live %t, stops %v", live, events)
+						}
+						if dispatcher != nil && (!dispatcher.AdmissionClosed() || dispatcher.Accepting()) {
+							t.Fatal("cleanup failure left public admission open")
+						}
+						if err := manager.Stop(governedContext(t)); err != nil || live || manager.State() != lifecycle.StateStopped {
+							t.Fatalf("cleanup retry = %v, dependency live %t, state %s", err, live, manager.State())
+						}
+						want := []string{"completed", "consumer", "consumer", "dependency"}
+						if err := manager.Stop(governedContext(t)); err != nil || !reflect.DeepEqual(events, want) {
+							t.Fatalf("successful cleanup repeated: %v, stops %v", err, events)
+						}
+					})
+				}
+			}
 		}
 	}
 }
