@@ -268,20 +268,68 @@ for each intrinsic Interface. Ordinary assembly supplies its own explicit
 limits. The compiled-policy boundary above owns timeout and retry execution;
 queue, circuit, and authored generated concurrency acceptance remain incomplete.
 
-## Implementation lifecycle
+## Implementation and Resource lifecycle
 
-Implementations that own resources requiring explicit startup and shutdown implement `lifecycle.Instance`. Constructors only assemble values and store configuration and dependencies; resource acquisition and background work belong in `Start`. Generated assembly supplies constructed lifecycle values in dependency order through `lifecycle.NewBinding` and `lifecycle.NewManager`; the Kernel does not discover Implementations or recompute dependencies. Values without lifecycle work need no lifecycle methods.
+Implementations and Resource providers that own acquisition or background work
+implement `lifecycle.Instance`. Constructors only assemble values and store
+configuration and dependencies; resource acquisition and background work belong
+in `Start`. Values without lifecycle work need no lifecycle methods.
 
-The lifecycle manager owns cleanup of every supplied constructed value from creation, including before `Start`. It starts values in generated order and stops them in reverse order. Startup cancellation, error, or panic performs bounded rollback of all constructed values, including the failing value and values whose `Start` was never entered. Rollback preserves context values but uses a fresh timeout independent of startup cancellation. `Stop` must tolerate never-started and partially started values. Cleanup attempts every pending value, skips successful stops on later calls, and leaves failed stops retryable with a fresh context. A `Stop` hook returning nil confirms cleanup even if cancellation arrived during that hook; later hooks remain pending when cancellation prevents entry. Errors and panics expose only safe constructor symbols and standard context cancellation or deadline causes, never Implementation error text.
+Generated assembly supplies constructed lifecycle values in one dependency-first
+order through these public APIs:
+
+```go
+func NewBinding(constructor string, instance Instance) (Binding, error)
+func NewResourceBinding(instanceName, providerConstructor string, instance Instance) (Binding, error)
+func NewManager(options ManagerOptions, bindings []Binding) (*Manager, error)
+```
+
+`NewBinding` identifies an Implementation by its exact constructor symbol.
+`NewResourceBinding` identifies a Resource by its exact configured instance name,
+independent of its provider. Names contain 1 through 128 ASCII bytes and match
+`[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*)*`.
+`Binding.Constructor()` always returns the real constructor provenance;
+`ResourceInstanceName()` returns the exact Resource name or empty for an
+Implementation. `Owner()` exposes the immutable, comparable typed identity.
+
+Several names using one provider are separately managed instances. A duplicate
+Resource name is rejected even across different providers. An Implementation
+constructor and Resource provider may share a symbol without sharing lifecycle
+identity. The manager preserves the generated mixed order; it does not discover
+values, compute dependencies, deduplicate constructed objects, or sort names.
+Assembly constructs each selected instance once and shares its ordinary Go value
+with consumers. Resource calls never create invocation catalog bindings,
+governed proxies, or Interface readiness entries.
+
+The lifecycle manager owns cleanup of every supplied constructed value from creation, including before `Start`. It starts values in generated order and stops them in reverse order. Startup cancellation, error, or panic performs bounded rollback of all constructed values, including the failing value and values whose `Start` was never entered. Rollback preserves context values but uses a fresh timeout independent of startup cancellation. `Stop` must tolerate never-started and partially started values. Cleanup attempts every pending value, skips successful stops on later calls, and leaves failed stops retryable with a fresh context. A `Stop` hook returning nil confirms cleanup even if cancellation arrived during that hook; later hooks remain pending when cancellation prevents entry. Errors and panics expose only validated typed owners, constructor provenance, and standard context cancellation or deadline causes, never provider error text or configuration.
+
+Assembly owns constructor-result interpretation. A non-nil value returned with
+an error must enter the cleanup set through its ordinary or Resource binding
+before cleanup begins. Nil and typed-nil instances are rejected by both binding
+constructors; they do not create cleanup ownership. For construction failure,
+create the manager over all constructed lifecycle values and call bounded `Stop`
+without `Start`, including before catalog publication.
 
 When those values use governed Interfaces, assembly supplies
 `ManagerOptions.Dispatcher` before publishing the catalog. The manager binds
-its complete constructor order using `Dispatcher.BindLifecycle`; duplicate,
+its complete typed owner order using `Dispatcher.BindLifecycle`; duplicate,
 invalid, repeated, and post-publication lifecycle assembly is rejected. Nil is
 for a manager without governed invocation. A dispatcher owns one lifecycle
 order; neither API discovers constructors or dependency edges. All Interface
 bindings selecting a managed constructor share its readiness. Bindings without
 lifecycle work, including intrinsics, are ready after construction.
+
+Direct coordinator callers use
+`Dispatcher.BindLifecycle([]invocation.LifecycleOwner)` and
+`Lifecycle.Start/Stop(ctx, owner, hook)`. Construct owners with
+`invocation.NewImplementationOwner(constructor)` or
+`invocation.NewResourceOwner(instanceName)`, both returning `(LifecycleOwner,
+error)`. Owner accessors are `Kind()`, `Constructor()`, `ResourceInstanceName()`,
+`Valid()`, and `String()`; a Resource owner has no constructor because provenance
+belongs to its lifecycle binding. The old string-only coordinator signatures
+are replaced. Existing manager-based Implementation assembly needs no API
+change; Resource assembly appends `NewResourceBinding` values at their generated
+dependency positions.
 
 An invocation-aware manager requires deadline-bound Start and Stop contexts.
 Each hook receives a private, short-lived context scope. Within that scope,
@@ -304,6 +352,14 @@ cancellation only once all of its target work has terminated. Assembly still
 owns application-wide coordination across dispatchers and transport readiness,
 and must call OpenAdmission explicitly after complete successful startup.
 Generated consumer integration is not established by these Kernel APIs.
+
+Hooks execute synchronously and must honor their contexts; cancellation cannot
+force arbitrary Go hook code to return. A bounded dispatcher drain can report
+failure while an uncooperative hook body remains live. Its dependencies stay
+owned until that body and its target work terminate; concurrent manager cleanup
+is rejected rather than racing the hook. Resource hook bodies and governed
+dependency calls use the same drain, cancellation, and retry rules as
+Implementation hooks.
 
 ## Context and configuration
 

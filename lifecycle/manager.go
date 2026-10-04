@@ -13,15 +13,15 @@ import (
 
 var (
 	// ErrInvalidManager reports invalid lifecycle bindings or options.
-	ErrInvalidManager = errors.New("invalid implementation lifecycle manager")
+	ErrInvalidManager = errors.New("invalid lifecycle manager")
 	// ErrInvalidContext reports a nil lifecycle operation context.
-	ErrInvalidContext = errors.New("invalid implementation lifecycle context")
+	ErrInvalidContext = errors.New("invalid lifecycle context")
 	// ErrState reports an operation that is not valid in the current state.
-	ErrState = errors.New("invalid implementation lifecycle state")
-	// ErrStart reports a redacted Implementation startup failure.
-	ErrStart = errors.New("implementation lifecycle startup failed")
-	// ErrStop reports one or more redacted Implementation shutdown failures.
-	ErrStop = errors.New("implementation lifecycle shutdown failed")
+	ErrState = errors.New("invalid lifecycle state")
+	// ErrStart reports a redacted lifecycle startup failure.
+	ErrStart = errors.New("lifecycle startup failed")
+	// ErrStop reports one or more redacted lifecycle shutdown failures.
+	ErrStop = errors.New("lifecycle shutdown failed")
 )
 
 // State is one closed manager lifecycle state.
@@ -66,7 +66,7 @@ type ManagerOptions struct {
 
 // Manager owns cleanup of every supplied constructed lifecycle instance,
 // starts them in generated order, and stops them in reverse order. It never
-// discovers or reorders Implementations.
+// discovers or reorders Implementations or Resources.
 type Manager struct {
 	mu              sync.RWMutex
 	bindings        []Binding
@@ -77,34 +77,35 @@ type Manager struct {
 }
 
 // NewManager validates and defensively copies an already-resolved lifecycle
-// order. Constructor symbols must be unique. Every binding is a constructed
+// order. Typed owners must be unique: an Implementation constructor or a
+// Resource name, regardless of its provider. Every binding is a constructed
 // value requiring Stop, even if Start is never entered.
 func NewManager(options ManagerOptions, bindings []Binding) (*Manager, error) {
 	if options.RollbackTimeout <= 0 {
 		return nil, ErrInvalidManager
 	}
-	seen := make(map[string]struct{}, len(bindings))
+	seen := make(map[invocation.LifecycleOwner]struct{}, len(bindings))
 	ordered := make([]Binding, len(bindings))
 	pendingStop := make([]bool, len(bindings))
 	for index, binding := range bindings {
 		if !binding.valid() {
 			return nil, fmt.Errorf("%w: binding %d: %w", ErrInvalidManager, index, ErrInvalidBinding)
 		}
-		if _, duplicate := seen[binding.constructor]; duplicate {
-			return nil, fmt.Errorf("%w: duplicate constructor %s", ErrInvalidManager, binding.constructor)
+		if _, duplicate := seen[binding.owner]; duplicate {
+			return nil, fmt.Errorf("%w: duplicate %s", ErrInvalidManager, binding.owner)
 		}
-		seen[binding.constructor] = struct{}{}
+		seen[binding.owner] = struct{}{}
 		ordered[index] = binding
 		pendingStop[index] = true
 	}
 	var invocations *invocation.Lifecycle
 	if options.Dispatcher != nil {
-		constructors := make([]string, len(ordered))
+		owners := make([]invocation.LifecycleOwner, len(ordered))
 		for index, binding := range ordered {
-			constructors[index] = binding.constructor
+			owners[index] = binding.owner
 		}
 		var err error
-		invocations, err = options.Dispatcher.BindLifecycle(constructors)
+		invocations, err = options.Dispatcher.BindLifecycle(owners)
 		if err != nil {
 			return nil, errors.Join(ErrInvalidManager, err)
 		}
@@ -160,7 +161,7 @@ func (m *Manager) Start(ctx context.Context) error {
 		if m.invocations == nil {
 			err = invokeHook(ctx, binding.instance.Start)
 		} else {
-			err = m.invocations.Start(ctx, binding.constructor, binding.instance.Start)
+			err = m.invocations.Start(ctx, binding.owner, binding.instance.Start)
 		}
 		if contextErr := ctx.Err(); contextErr != nil {
 			err = contextErr
@@ -168,7 +169,7 @@ func (m *Manager) Start(ctx context.Context) error {
 		if err != nil {
 			rollback := m.rollback(ctx)
 			m.setState(StateFailed)
-			return errors.Join(operationFailure(ErrStart, "constructor "+binding.constructor, err), rollback)
+			return errors.Join(operationFailure(ErrStart, binding.description(), err), rollback)
 		}
 	}
 	m.setState(StateRunning)
@@ -256,14 +257,14 @@ func (m *Manager) stopPending(ctx context.Context) error {
 			if drainErr := m.invocations.Drain(ctx); drainErr != nil {
 				var prior error
 				if len(failed) != 0 {
-					prior = operationFailure(ErrStop, "constructors "+strings.Join(failed, ", "), cause)
+					prior = operationFailure(ErrStop, strings.Join(failed, ", "), cause)
 				}
 				return errors.Join(prior, operationFailure(ErrStop, "invocation drain", ctx.Err()), drainErr)
 			}
-			err = m.invocations.Stop(ctx, binding.constructor, binding.instance.Stop)
+			err = m.invocations.Stop(ctx, binding.owner, binding.instance.Stop)
 		}
 		if err != nil {
-			failed = append(failed, binding.constructor)
+			failed = append(failed, binding.description())
 			if contextError(err) != nil {
 				cause = contextError(err)
 			}
@@ -274,7 +275,7 @@ func (m *Manager) stopPending(ctx context.Context) error {
 	if len(failed) == 0 {
 		return nil
 	}
-	return operationFailure(ErrStop, "constructors "+strings.Join(failed, ", "), cause)
+	return operationFailure(ErrStop, strings.Join(failed, ", "), cause)
 }
 
 func invokeHook(ctx context.Context, hook func(context.Context) error) (err error) {
@@ -296,7 +297,7 @@ func invokeHook(ctx context.Context, hook func(context.Context) error) (err erro
 	return nil
 }
 
-var errInstanceHook = errors.New("implementation lifecycle hook failed")
+var errInstanceHook = errors.New("lifecycle hook failed")
 
 type safeOperationError struct {
 	kind   error
