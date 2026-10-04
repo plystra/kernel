@@ -189,20 +189,24 @@ func TestGovernedLifecycleFailureCleansEveryConstructedValue(t *testing.T) {
 }
 
 func TestGovernedLifecycleRetainsLateHookTargetsBeforeCleanup(t *testing.T) {
-	for _, mode := range []string{"start-target", "stop-target", "start-response", "stop-response"} {
+	for _, mode := range []string{"start-target", "stop-target", "start-response", "stop-response", "resource-start-target", "resource-stop-target", "resource-start-response", "resource-stop-response"} {
 		t.Run(mode, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				phase, _, _ := strings.Cut(mode, "-")
+				phase, _, _ := strings.Cut(strings.TrimPrefix(mode, "resource-"), "-")
 				processing := strings.HasSuffix(mode, "response")
+				resourceName := ""
+				if strings.HasPrefix(mode, "resource-") {
+					resourceName = "database.consumer"
+				}
 				var fixture governedFixture
-				var dependentStops, dependencyStops atomic.Int32
+				var dependentStops, dependencyStops, resourceStops atomic.Int32
 				entered, release := make(chan struct{}), make(chan struct{})
 				var once sync.Once
 				defer once.Do(func() { close(release) })
 				hold := func(value string) string {
 					close(entered)
 					<-release
-					if dependencyStops.Load() != 0 {
+					if dependencyStops.Load() != 0 || resourceStops.Load() != 0 {
 						t.Error("dependency stopped before its late target or response processor")
 					}
 					return value
@@ -216,6 +220,10 @@ func TestGovernedLifecycleRetainsLateHookTargetsBeforeCleanup(t *testing.T) {
 					return err
 				}
 				fixture = newGovernedFixture(t, []governedMember{
+					{name: "Resource", resourceName: "database.primary", constructor: resourceProvider, instance: &testLifecycleInstance{stop: func(context.Context) error {
+						resourceStops.Add(1)
+						return nil
+					}}},
 					{name: "Dependency", instance: &testLifecycleInstance{stop: func(context.Context) error {
 						dependencyStops.Add(1)
 						return nil
@@ -225,7 +233,7 @@ func TestGovernedLifecycleRetainsLateHookTargetsBeforeCleanup(t *testing.T) {
 						}
 						return "response", nil
 					}},
-					{name: "Consumer", instance: &testLifecycleInstance{
+					{name: "Consumer", resourceName: resourceName, instance: &testLifecycleInstance{
 						start: func(ctx context.Context) error {
 							if phase == "start" {
 								return target(ctx)
@@ -252,7 +260,7 @@ func TestGovernedLifecycleRetainsLateHookTargetsBeforeCleanup(t *testing.T) {
 				}()
 				<-entered
 				err := <-result
-				if err == nil || !errors.Is(err, context.DeadlineExceeded) || dependencyStops.Load() != 0 || fixture.dispatcher.ActiveAttempts() != 1 {
+				if err == nil || !errors.Is(err, context.DeadlineExceeded) || dependencyStops.Load() != 0 || resourceStops.Load() != 0 || fixture.dispatcher.ActiveAttempts() != 1 {
 					t.Fatalf("bounded %s = %v, stopped %d, attempts %d", phase, err, dependencyStops.Load(), fixture.dispatcher.ActiveAttempts())
 				}
 				if err := fixture.dispatcher.OpenAdmission(); !errors.Is(err, invocation.ErrDispatcherDraining) {
@@ -260,7 +268,7 @@ func TestGovernedLifecycleRetainsLateHookTargetsBeforeCleanup(t *testing.T) {
 				}
 				once.Do(func() { close(release) })
 				synctest.Wait()
-				if err := fixture.manager.Stop(governedContext(t)); err != nil || dependencyStops.Load() != 1 || fixture.dispatcher.ActiveAttempts() != 0 {
+				if err := fixture.manager.Stop(governedContext(t)); err != nil || dependencyStops.Load() != 1 || resourceStops.Load() != 1 || fixture.dispatcher.ActiveAttempts() != 0 {
 					t.Fatalf("cleanup retry = %v, stops %d", err, dependencyStops.Load())
 				}
 			})
@@ -561,11 +569,12 @@ func BenchmarkGovernedLifecycle(b *testing.B) {
 }
 
 type governedMember struct {
-	name        string
-	constructor string
-	instance    lifecycle.Instance
-	handler     capability.Handler[string, string]
-	policy      *invocation.Policy
+	name         string
+	constructor  string
+	resourceName string
+	instance     lifecycle.Instance
+	handler      capability.Handler[string, string]
+	policy       *invocation.Policy
 }
 
 type governedFixture struct {
@@ -594,10 +603,16 @@ func newGovernedFixture(t testing.TB, members []governedMember) governedFixture 
 		}
 		if member.instance != nil {
 			binding, err := lifecycle.NewBinding(constructor, member.instance)
+			if member.resourceName != "" {
+				binding, err = lifecycle.NewResourceBinding(member.resourceName, constructor, member.instance)
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
 			lifecycles = append(lifecycles, binding)
+		}
+		if member.resourceName != "" {
+			continue
 		}
 		contract := capability.MustParseContract[string, string]("example." + strings.ToLower(member.name) + "/v1")
 		handler := member.handler
